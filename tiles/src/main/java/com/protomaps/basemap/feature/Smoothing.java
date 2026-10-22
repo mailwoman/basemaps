@@ -6,6 +6,7 @@ import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.Geometry;
 import org.locationtech.jts.geom.LineString;
 import org.locationtech.jts.geom.MultiLineString;
+import org.locationtech.jts.geom.Polygon;
 
 /**
  * Corner rounding for road lines, by Chaikin's corner-cutting algorithm.
@@ -48,6 +49,48 @@ public final class Smoothing {
       return multi.getFactory().createMultiLineString(parts);
     }
     return geometry;
+  }
+
+  /**
+   * Rounds every corner of a polygon in world coordinates by {@code passes} capped Chaikin passes, cutting at most
+   * {@code maxCutMeters} from each corner. Rings are closed, so every vertex is a corner, including the first.
+   * Returns the input unchanged for any other geometry or when the result is invalid.
+   */
+  public static Geometry roundWorldPolygon(Geometry geometry, double maxCutMeters, int passes) {
+    if (!(geometry instanceof Polygon polygon) || polygon.isEmpty()) {
+      return geometry;
+    }
+    double maxCut = maxCutWorldUnits(polygon.getCentroid().getY()) * maxCutMeters / MAX_CUT_METERS;
+    var factory = polygon.getFactory();
+    var shell = factory.createLinearRing(roundRing(polygon.getExteriorRing().getCoordinates(), maxCut, passes));
+    var holes = new org.locationtech.jts.geom.LinearRing[polygon.getNumInteriorRing()];
+    for (int i = 0; i < holes.length; i++) {
+      holes[i] = factory.createLinearRing(roundRing(polygon.getInteriorRingN(i).getCoordinates(), maxCut, passes));
+    }
+    Polygon rounded = factory.createPolygon(shell, holes);
+    return rounded.isValid() ? rounded : polygon;
+  }
+
+  private static Coordinate[] roundRing(Coordinate[] closed, double maxCut, int passes) {
+    // Drop the closing duplicate, cut every corner cyclically, then close the ring again.
+    Coordinate[] ring = java.util.Arrays.copyOf(closed, closed.length - 1);
+    if (ring.length < 3) {
+      return closed;
+    }
+    for (int pass = 0; pass < passes; pass++) {
+      List<Coordinate> out = new ArrayList<>(ring.length * 2);
+      for (int i = 0; i < ring.length; i++) {
+        Coordinate prev = ring[(i - 1 + ring.length) % ring.length];
+        Coordinate vertex = ring[i];
+        Coordinate next = ring[(i + 1) % ring.length];
+        out.add(towards(vertex, prev, maxCut));
+        out.add(towards(vertex, next, maxCut));
+      }
+      ring = out.toArray(Coordinate[]::new);
+    }
+    Coordinate[] result = java.util.Arrays.copyOf(ring, ring.length + 1);
+    result[ring.length] = new Coordinate(ring[0]);
+    return result;
   }
 
   private static LineString smooth(LineString line) {

@@ -10,6 +10,7 @@ import com.onthegomap.planetiler.geo.GeometryException;
 import com.onthegomap.planetiler.reader.SourceFeature;
 import com.onthegomap.planetiler.util.Parse;
 import com.protomaps.basemap.feature.FeatureId;
+import com.protomaps.basemap.feature.Smoothing;
 import com.protomaps.basemap.postprocess.Area;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -115,7 +116,7 @@ public class Buildings implements ForwardingProfile.LayerPostProcessor {
         minZoom = 13;
       }
 
-      var feature = features.polygon(this.name())
+      var feature = roundedFootprint(sf, features)
         .setId(FeatureId.create(sf))
         // Core Tilezen schema properties
         .setAttr("kind", kind)
@@ -155,6 +156,25 @@ public class Buildings implements ForwardingProfile.LayerPostProcessor {
     }
   }
 
+  /**
+   * Corner radius of building footprints, in meters. Rounded corners give extruded walls a soft vertical edge.
+   */
+  static final double CORNER_METERS = 1.2;
+  static final int CORNER_PASSES = 2;
+
+  /**
+   * Starts a building feature whose footprint has rounded corners, falling back to the source polygon.
+   */
+  private FeatureCollector.Feature roundedFootprint(SourceFeature sf, FeatureCollector features) {
+    try {
+      return features.geometry(this.name(),
+        Smoothing.roundWorldPolygon(sf.worldGeometry(), CORNER_METERS, CORNER_PASSES));
+    } catch (GeometryException e) {
+      e.log("Failed to round building footprint");
+      return features.polygon(this.name());
+    }
+  }
+
   public void processOverture(SourceFeature sf, FeatureCollector features) {
     // Filter by type field - Overture theme
     if (!"buildings".equals(sf.getString("theme"))) {
@@ -178,7 +198,7 @@ public class Buildings implements ForwardingProfile.LayerPostProcessor {
       sf.hasTag("num_floors") ? String.valueOf(sf.getTag("num_floors")) : null,
       sf.hasTag("min_height") ? String.valueOf(sf.getTag("min_height")) : null);
 
-    var feature = features.polygon(this.name())
+    var feature = roundedFootprint(sf, features)
       .setAttr("kind", isPart ? "building_part" : "building")
       // NOTE: Height is quantized by zoom in a post-process step
       .setAttr(HEIGHT_KEY, height.height())
