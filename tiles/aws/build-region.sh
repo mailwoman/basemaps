@@ -70,7 +70,15 @@ if ! curl -fsSL --retry 2 --connect-timeout 30 --max-time 900 -o data/sources/qr
 fi
 
 echo "== planetiler inputs (background)"
-java -jar "$JAR" --area="$AREA" --download --only-download > planetiler-download.log 2>&1 &
+# Planetiler's downloader fails the whole build when one size request times out, which happens with
+# osmdata.openstreetmap.de. curl fetches the large polygon files first with retries; Planetiler skips existing files.
+(
+  for name in water-polygons-split-3857 land-polygons-split-3857; do
+    curl -fsSL --retry 5 --retry-delay 15 --retry-all-errors --connect-timeout 60 \
+      -o "data/sources/${name}.zip" "https://osmdata.openstreetmap.de/download/${name}.zip"
+  done
+  java -jar "$JAR" --area="$AREA" --download --only-download --http_timeout=300s --http_retries=3
+) > planetiler-download.log 2>&1 &
 DOWNLOAD_PID=$!
 
 echo "== overture buildings"
