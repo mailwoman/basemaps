@@ -124,7 +124,9 @@ public class Buildings implements ForwardingProfile.LayerPostProcessor {
         // NOTE: Height is quantized by zoom in a post-process step
         .setAttr(HEIGHT_KEY, height.height())
         .setAttr("sort_rank", 400)
-        .setZoomRange(minZoom, 15);
+        .setZoomRange(minZoom, 15)
+        // postProcess decides which small footprints survive; see the merge thresholds there.
+        .setMinPixelSize(0);
 
       if (kind.equals("building_part")) {
         // We don't need to set WithMinzoom because that's implicate with the ZoomRange
@@ -165,6 +167,11 @@ public class Buildings implements ForwardingProfile.LayerPostProcessor {
     }
 
     boolean isPart = "building_part".equals(sf.getString("type"));
+    // A building with parts is drawn by its parts. Its own outline is the envelope of every part at the tallest
+    // part's height, which would hide a tower's shape inside a plain prism.
+    if (!isPart && Boolean.TRUE.equals(sf.getTag("has_parts"))) {
+      return;
+    }
     // Overture gives height in meters and floors as `num_floors`; floors convert the same way as `building:levels`.
     var height = parseHeight(
       sf.hasTag("height") ? String.valueOf(sf.getTag("height")) : null,
@@ -176,7 +183,8 @@ public class Buildings implements ForwardingProfile.LayerPostProcessor {
       // NOTE: Height is quantized by zoom in a post-process step
       .setAttr(HEIGHT_KEY, height.height())
       .setAttr("sort_rank", 400)
-      .setZoomRange(isPart ? 13 : 11, 15);
+      .setZoomRange(isPart ? 13 : 11, 15)
+      .setMinPixelSize(0);
 
     if (isPart) {
       feature.setAttr(MIN_HEIGHT_KEY, height.min_height());
@@ -256,9 +264,9 @@ public class Buildings implements ForwardingProfile.LayerPostProcessor {
         }
       }
     }
-    // Below z13 nearby footprints merge into blocks. At z13 and z14 the merge keeps footprints down to one square
-    // pixel, so individual buildings appear before z15 rather than all at once.
-    double minArea = zoom >= 13 ? 1.0 : 3.125;
+    // Below z13 nearby footprints merge into blocks. From z13 every footprint is kept, so the set of buildings is the
+    // same at z13, z14 and z15 and buildings do not appear in steps as the map zooms in.
+    double minArea = zoom >= 13 ? 0 : 3.125;
     return FeatureMerge.mergeNearbyPolygons(items, minArea, minArea, 0.5, 0.5);
   }
 }

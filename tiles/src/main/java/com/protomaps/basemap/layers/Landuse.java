@@ -73,6 +73,11 @@ public class Landuse implements ForwardingProfile.LayerPostProcessor {
       with("landuse", "vineyard", "plant_nursery"),
       use("kind", fromTag("landuse"))
     ),
+    // Sports grounds. Large parks around stadiums are often tagged sports_centre rather than park.
+    rule(
+      with("leisure", "sports_centre", "stadium", "track"),
+      use("kind", fromTag("leisure"))
+    ),
     rule(
       with("""
           amenity
