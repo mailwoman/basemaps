@@ -193,6 +193,15 @@ public class Basemap extends ForwardingProfile {
   }
 
   /**
+   * The parquet files a path names: the file itself, or every {@code .parquet} file under a directory, such as a
+   * whole Overture theme synced from its release bucket with its hive partitions.
+   */
+  static List<Path> parquetInputs(String path) {
+    Path base = Path.of(path);
+    return Files.isDirectory(base) ? Glob.of(base).resolve("**", "*.parquet").find() : List.of(base);
+  }
+
+  /**
    * Extracts bounds from GeoParquet metadata and returns them as a formatted string.
    *
    * @param parquetPath Path to the GeoParquet file
@@ -349,8 +358,8 @@ public class Basemap extends ForwardingProfile {
             "https://osmdata.openstreetmap.de/download/land-polygons-split-3857.zip");
       } else {
         planetiler.addParquetSource("pm:overture_base",
-          List.of(Path.of(overtureBase)),
-          false,
+          parquetInputs(overtureBase),
+          Files.isDirectory(Path.of(overtureBase)),
           fields -> fields.get("id"),
           fields -> fields.get("type")
         );
@@ -369,8 +378,8 @@ public class Basemap extends ForwardingProfile {
       "Overture buildings .parquet to use for footprints alongside an OSM --area", "");
     if (!overtureBuildingsFile.isEmpty()) {
       planetiler.addParquetSource("pm:overture_buildings",
-        List.of(Path.of(overtureBuildingsFile)),
-        false,
+        parquetInputs(overtureBuildingsFile),
+        Files.isDirectory(Path.of(overtureBuildingsFile)),
         fields -> fields.get("id"),
         fields -> fields.get("type")
       );

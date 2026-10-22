@@ -10,11 +10,12 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Utility networks, barriers and street furniture that the Protomaps schema leaves out.
+ * Utility networks, barriers, street furniture and road-side signals that the Protomaps schema leaves out.
  *
  * <p>
  * Each feature carries {@code kind}, the OSM key that classified it ({@code power}, {@code telecom}, {@code water},
- * {@code barrier}, {@code emergency}, {@code natural}, {@code man_made}), and {@code kind_detail}, the tag value.
+ * {@code barrier}, {@code emergency}, {@code highway}, {@code amenity}, {@code leisure}, {@code natural},
+ * {@code man_made}), and {@code kind_detail}, the tag value.
  * Lines become line features, nodes point features, and closed areas a polygon plus a point at its centroid so a
  * style can place an icon on it.
  * </p>
@@ -33,21 +34,39 @@ public class Infrastructure implements ForwardingProfile.LayerPostProcessor {
     "telecom", Map.of(
       "exchange", 14, "data_center", 14, "connection_point", 15, "line", 14),
     "barrier", Map.of(
-      "fence", 15, "wall", 15, "retaining_wall", 15, "hedge", 15, "gate", 15, "bollard", 15, "lift_gate", 15),
+      "fence", 15, "wall", 15, "retaining_wall", 15, "hedge", 15, "gate", 15, "bollard", 15, "lift_gate", 15,
+      "kerb", 15),
     "emergency", Map.of(
       "fire_hydrant", 15, "water_tank", 15, "suction_point", 15, "defibrillator", 15, "siren", 15),
+    // Nodes on the road network: signals, signs, crossings and lighting.
+    "highway", Map.of(
+      "traffic_signals", 15, "stop", 15, "give_way", 15, "crossing", 15, "street_lamp", 15,
+      "speed_camera", 15, "traffic_mirror", 15),
+    // Street furniture.
+    "amenity", Map.ofEntries(
+      Map.entry("bench", 15), Map.entry("waste_basket", 15), Map.entry("post_box", 15),
+      Map.entry("bicycle_parking", 15), Map.entry("vending_machine", 15), Map.entry("recycling", 15),
+      Map.entry("drinking_water", 15), Map.entry("telephone", 15)),
+    "leisure", Map.of("picnic_table", 15),
     "natural", Map.of("tree_row", 15),
     "man_made", Map.ofEntries(
       Map.entry("mast", 14), Map.entry("tower", 14), Map.entry("street_cabinet", 15),
       Map.entry("water_tower", 14), Map.entry("storage_tank", 15), Map.entry("reservoir_covered", 15),
       Map.entry("water_works", 13), Map.entry("wastewater_plant", 13), Map.entry("pumping_station", 15),
-      Map.entry("pipeline", 14), Map.entry("embankment", 15))
+      Map.entry("pipeline", 14), Map.entry("embankment", 15), Map.entry("manhole", 15),
+      Map.entry("utility_pole", 15))
   );
 
   /**
    * Keys checked in order; the first key with a kept value classifies the feature.
    */
-  private static final List<String> KEYS = List.of("power", "telecom", "emergency", "barrier", "natural", "man_made");
+  private static final List<String> KEYS = List.of("power", "telecom", "emergency", "barrier", "highway", "amenity",
+    "leisure", "natural", "man_made");
+
+  /**
+   * Keys kept only as points, because a way with the same tag is drawn by another layer.
+   */
+  private static final Set<String> POINT_ONLY_KEYS = Set.of("highway", "amenity", "leisure");
 
   /**
    * {@code man_made} values that belong to the water network rather than general structures.
@@ -69,7 +88,7 @@ public class Infrastructure implements ForwardingProfile.LayerPostProcessor {
       }
       String value = sf.getString(key);
       Integer minZoom = KEPT.get(key).get(value);
-      if (minZoom == null) {
+      if (minZoom == null || (POINT_ONLY_KEYS.contains(key) && !sf.isPoint())) {
         continue;
       }
 
@@ -121,6 +140,11 @@ public class Infrastructure implements ForwardingProfile.LayerPostProcessor {
       .setAttr("operator", sf.getString("operator"))
       .setAttr("voltage", sf.getString("voltage"))
       .setAttr("name", sf.getString("name"))
+      // Fibre and copper telecom lines, as OSM's telecom:medium records them.
+      .setAttr("medium", sf.getString("telecom:medium"))
+      // A crossing's markings (zebra, marked, traffic_signals) and a kerb's height (lowered, raised, flush).
+      .setAttr("crossing", sf.getString("crossing"))
+      .setAttr("kerb", sf.getString("kerb"))
       .setZoomRange(minZoom, 15);
   }
 

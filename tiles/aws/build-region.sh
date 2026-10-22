@@ -11,7 +11,7 @@ set -euo pipefail
 
 : "${AREA:?Geofabrik area name, such as japan}"
 : "${GEOFABRIK_PATH:?Geofabrik download path without the suffix, such as asia/japan}"
-: "${BBOX:?xmin,ymin,xmax,ymax for the Overture buildings query}"
+: "${BBOX:?xmin,ymin,xmax,ymax for the Overture queries and the treetop roads; a planet build applies it to the treetop roads only}"
 : "${BRANCH:=main}"
 : "${OUTPUT_KEY:?R2 key for the PMTiles, such as protomaps/builds/japan.pmtiles}"
 : "${MAX_HOURS:=8}"
@@ -37,7 +37,16 @@ export AWS_REGION="${AWS_REGION:-us-west-2}"
 export HOME="${HOME:-/root}"
 WORK=/mnt/build
 mkdir -p "$WORK"
+# An instance with local NVMe storage (the r7gd family) builds on it, because a planet build's temporary files run
+# to hundreds of gigabytes and Planetiler reads them back at random.
+NVME=$(lsblk -dpno NAME,MODEL | awk '/Instance Storage/ {print $1; exit}')
+if [[ -n "$NVME" ]]; then
+  mkfs.xfs -f -q "$NVME" && mount "$NVME" "$WORK"
+fi
 cd "$WORK"
+df -h "$WORK" | tail -1
+PLANET=false
+[[ "$AREA" == "planet" ]] && PLANET=true
 
 echo "== packages"
 dnf install -y -q git java-21-amazon-corretto-devel maven-amazon-corretto21 unzip
@@ -78,7 +87,14 @@ fetch() {
   curl -fsSL --retry 5 --retry-delay 15 --retry-all-errors --connect-timeout 60 -o "data/sources/$1" "$2"
 }
 (
-  fetch "${AREA}.osm.pbf" "https://download.geofabrik.de/${GEOFABRIK_PATH}-latest.osm.pbf" &
+  if $PLANET; then
+    # The OpenStreetMap on AWS bucket mirrors the weekly planet file. planet.openstreetmap.org is the fallback.
+    { AWS_REGION=us-east-1 aws s3 cp --no-sign-request --only-show-errors \
+        s3://osm-pds/planet-latest.osm.pbf "data/sources/planet.osm.pbf" ||
+      fetch planet.osm.pbf https://planet.openstreetmap.org/pbf/planet-latest.osm.pbf; } &
+  else
+    fetch "${AREA}.osm.pbf" "https://download.geofabrik.de/${GEOFABRIK_PATH}-latest.osm.pbf" &
+  fi
   fetch natural_earth_vector.gpkg.zip https://naciscdn.org/naturalearth/packages/natural_earth_vector.gpkg.zip &
   fetch daylight-landcover.gpkg https://r2-public.protomaps.com/datasets/daylight-landcover.gpkg &
   fetch pgf-encoding.zip https://wipfli.github.io/pgf-encoding/pgf-encoding.zip &
@@ -122,20 +138,31 @@ echo "== canopy treetops (background)"
 TREETOPS_PID=$!
 
 echo "== overture buildings"
-duckdb -c "
-INSTALL httpfs; LOAD httpfs;
-SET s3_region='us-west-2';
-COPY (
-  SELECT *
-  FROM read_parquet(
-    's3://overturemaps-us-west-2/release/${RELEASE}/theme=buildings/*/*.parquet',
-    hive_partitioning=1, union_by_name=1
-  )
-  WHERE bbox.xmin <= ${XMAX} AND bbox.xmax >= ${XMIN}
-    AND bbox.ymin <= ${YMAX} AND bbox.ymax >= ${YMIN}
-) TO 'data/sources/${AREA}-buildings.parquet' (FORMAT PARQUET);"
-[[ -s "data/sources/${AREA}-buildings.parquet" ]] || { echo "Overture buildings query wrote no file"; exit 1; }
-duckdb -c "SELECT type, count(*) FROM 'data/sources/${AREA}-buildings.parquet' GROUP BY type"
+if $PLANET; then
+  # The whole theme is copied as published, partitions and all; Planetiler reads the directory.
+  BUILDINGS="data/sources/planet-buildings"
+  aws s3 sync --no-sign-request --only-show-errors \
+    "s3://overturemaps-us-west-2/release/${RELEASE}/theme=buildings/" "$BUILDINGS/"
+  [[ -n "$(find "$BUILDINGS" -name '*.parquet' -print -quit)" ]] || { echo "Overture buildings sync wrote no files"; exit 1; }
+  du -sh "$BUILDINGS"
+  BBOX_FILTER="TRUE"
+else
+  BUILDINGS="data/sources/${AREA}-buildings.parquet"
+  BBOX_FILTER="bbox.xmin <= ${XMAX} AND bbox.xmax >= ${XMIN} AND bbox.ymin <= ${YMAX} AND bbox.ymax >= ${YMIN}"
+  duckdb -c "
+  INSTALL httpfs; LOAD httpfs;
+  SET s3_region='us-west-2';
+  COPY (
+    SELECT *
+    FROM read_parquet(
+      's3://overturemaps-us-west-2/release/${RELEASE}/theme=buildings/*/*.parquet',
+      hive_partitioning=1, union_by_name=1
+    )
+    WHERE ${BBOX_FILTER}
+  ) TO '${BUILDINGS}' (FORMAT PARQUET);"
+  [[ -s "$BUILDINGS" ]] || { echo "Overture buildings query wrote no file"; exit 1; }
+  duckdb -c "SELECT type, count(*) FROM '${BUILDINGS}' GROUP BY type"
+fi
 
 echo "== overture land and ocean"
 duckdb -c "
@@ -148,8 +175,7 @@ COPY (
     hive_partitioning=1, union_by_name=1
   )
   WHERE ((type = 'land' AND subtype = 'land') OR (type = 'water' AND subtype = 'ocean'))
-    AND bbox.xmin <= ${XMAX} AND bbox.xmax >= ${XMIN}
-    AND bbox.ymin <= ${YMAX} AND bbox.ymax >= ${YMIN}
+    AND ${BBOX_FILTER}
 ) TO 'data/sources/${AREA}-base.parquet' (FORMAT PARQUET);"
 duckdb -c "SELECT type, subtype, count(*) FROM 'data/sources/${AREA}-base.parquet' GROUP BY ALL" | tee base-counts.txt
 grep -q " ocean " base-counts.txt || { echo "Overture base query returned no ocean polygons"; exit 1; }
@@ -170,9 +196,9 @@ tail -n 15 treetops.log
 ls -la data/sources
 
 echo "== planetiler"
-java -Xmx24g -jar "$JAR" \
+java -Xmx"${JAVA_HEAP:-24g}" -jar "$JAR" \
   --area="$AREA" \
-  --overture_buildings="data/sources/${AREA}-buildings.parquet" \
+  --overture_buildings="$BUILDINGS" \
   --overture_base="data/sources/${AREA}-base.parquet" \
   --download_osm_tile_weights=false \
   "${TREETOP_ARGS[@]}" \

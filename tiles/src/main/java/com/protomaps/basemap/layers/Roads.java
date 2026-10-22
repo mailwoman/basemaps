@@ -453,6 +453,15 @@ public class Roads implements ForwardingProfile.LayerPostProcessor, ForwardingPr
       feat.setAttrWithMinzoom("is_tunnel", true, 12);
     }
 
+    // A bike lane or track along the road, from the first of OSM's cycleway tags that names one.
+    for (String key : List.of("cycleway", "cycleway:both", "cycleway:left", "cycleway:right")) {
+      String cycleway = sf.getString(key);
+      if (cycleway != null && !cycleway.equals("no") && !cycleway.equals("separate")) {
+        feat.setAttrWithMinzoom("cycleway", cycleway, 14);
+        break;
+      }
+    }
+
     // Server sort features so client label collisions are pre-sorted
     feat.setSortKey(minZoom);
 
