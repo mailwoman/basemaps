@@ -9,6 +9,7 @@ import com.onthegomap.planetiler.VectorTile;
 import com.onthegomap.planetiler.geo.GeometryException;
 import com.onthegomap.planetiler.reader.SourceFeature;
 import com.onthegomap.planetiler.util.Parse;
+import com.onthegomap.planetiler.util.ZoomFunction;
 import com.protomaps.basemap.feature.FeatureId;
 import com.protomaps.basemap.feature.Smoothing;
 import com.protomaps.basemap.postprocess.Area;
@@ -126,8 +127,8 @@ public class Buildings implements ForwardingProfile.LayerPostProcessor {
         .setAttr(HEIGHT_KEY, height.height())
         .setAttr("sort_rank", 400)
         .setZoomRange(minZoom, 15)
-        // postProcess decides which small footprints survive; see the merge thresholds there.
-        .setMinPixelSize(0);
+        .setMinPixelSize(0)
+        .setMinPixelSizeOverrides(MERGED_ZOOMS_MIN_PIXEL_SIZE);
 
       if (kind.equals("building_part")) {
         // We don't need to set WithMinzoom because that's implicate with the ZoomRange
@@ -160,6 +161,12 @@ public class Buildings implements ForwardingProfile.LayerPostProcessor {
    * Corner radius of building footprints, in meters. Rounded corners give extruded walls a soft vertical edge.
    */
   static final double CORNER_METERS = 1.2;
+
+  /**
+   * Minimum pixel size at z11 and z12, where footprints merge into blocks; from z13 every footprint is emitted.
+   * The z11-12 merge drops sub-pixel buildings anyway, so emitting them there only adds encoding work.
+   */
+  static final ZoomFunction<Number> MERGED_ZOOMS_MIN_PIXEL_SIZE = ZoomFunction.maxZoom(12, 1.0);
   static final int CORNER_PASSES = 2;
 
   /**
@@ -204,7 +211,8 @@ public class Buildings implements ForwardingProfile.LayerPostProcessor {
       .setAttr(HEIGHT_KEY, height.height())
       .setAttr("sort_rank", 400)
       .setZoomRange(isPart ? 13 : 11, 15)
-      .setMinPixelSize(0);
+      .setMinPixelSize(0)
+      .setMinPixelSizeOverrides(MERGED_ZOOMS_MIN_PIXEL_SIZE);
 
     if (isPart) {
       feature.setAttr(MIN_HEIGHT_KEY, height.min_height());
