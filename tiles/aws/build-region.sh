@@ -32,6 +32,8 @@ trap finish EXIT
 shutdown -h "+$((MAX_HOURS * 60))"
 
 export AWS_REGION="${AWS_REGION:-us-west-2}"
+# User data runs without HOME, and DuckDB needs one to install its httpfs extension.
+export HOME="${HOME:-/root}"
 WORK=/mnt/build
 mkdir -p "$WORK"
 cd "$WORK"
@@ -58,6 +60,11 @@ mkdir -p data/sources
 JAR=target/protomaps-basemap-HEAD-with-deps.jar
 
 # The OSM extract and the other Planetiler inputs download while DuckDB pulls the Overture buildings.
+# Planetiler's downloader times out on QRank's size request from EC2, so curl fetches it first with retries.
+# Planetiler skips a download whose file already exists.
+curl -fsSL --retry 5 --retry-delay 10 --max-time 900 -o data/sources/qrank.csv.gz \
+  https://qrank.toolforge.org/download/qrank.csv.gz
+
 echo "== planetiler inputs (background)"
 java -jar "$JAR" --area="$AREA" --download --only-download > planetiler-download.log 2>&1 &
 DOWNLOAD_PID=$!
@@ -66,6 +73,8 @@ echo "== overture buildings"
 RELEASE=$(duckdb -noheader -list -c "SELECT latest FROM read_json('https://stac.overturemaps.org/catalog.json')")
 IFS=',' read -r XMIN YMIN XMAX YMAX <<< "$BBOX"
 echo "release $RELEASE bbox $BBOX"
+# The DuckDB CLI exits 0 after a failed statement, so each step checks its own result.
+[[ -n "$RELEASE" ]] || { echo "no Overture release found"; exit 1; }
 duckdb -c "
 INSTALL httpfs; LOAD httpfs;
 SET s3_region='us-west-2';
@@ -78,6 +87,8 @@ COPY (
   WHERE bbox.xmin <= ${XMAX} AND bbox.xmax >= ${XMIN}
     AND bbox.ymin <= ${YMAX} AND bbox.ymax >= ${YMIN}
 ) TO 'data/sources/${AREA}-buildings.parquet' (FORMAT PARQUET);"
+[[ -s "data/sources/${AREA}-buildings.parquet" ]] || { echo "Overture buildings query wrote no file"; exit 1; }
+duckdb -c "SELECT type, count(*) FROM 'data/sources/${AREA}-buildings.parquet' GROUP BY type"
 echo "== waiting for planetiler inputs"
 if ! wait "$DOWNLOAD_PID"; then
   tail -n 40 planetiler-download.log
