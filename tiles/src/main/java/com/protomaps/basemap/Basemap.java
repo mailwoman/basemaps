@@ -19,6 +19,7 @@ import com.protomaps.basemap.layers.Places;
 import com.protomaps.basemap.layers.Pois;
 import com.protomaps.basemap.layers.Roads;
 import com.protomaps.basemap.layers.Transit;
+import com.protomaps.basemap.layers.Trees;
 import com.protomaps.basemap.layers.Water;
 import com.protomaps.basemap.postprocess.Clip;
 import com.protomaps.basemap.text.FontRegistry;
@@ -57,6 +58,13 @@ public class Basemap extends ForwardingProfile {
       var infrastructure = new Infrastructure();
       registerHandler(infrastructure);
       registerSourceHandler("osm", infrastructure::processOsm);
+    }
+
+    if (layer.isEmpty() || layer.equals(Trees.LAYER_NAME)) {
+      var trees = new Trees();
+      registerHandler(trees);
+      registerSourceHandler("osm", trees::processOsm);
+      registerSourceHandler("pm:treetops", trees::processTreetop);
     }
 
     if (layer.isEmpty() || layer.equals(Boundaries.LAYER_NAME)) {
@@ -349,6 +357,13 @@ public class Basemap extends ForwardingProfile {
       }
     }
 
+    // Treetops detected in a canopy height raster, as GeoParquet points with a height column.
+    String treetopsFile = args.getString("treetops", "GeoParquet of treetop points with a height column", "");
+    if (!treetopsFile.isEmpty()) {
+      planetiler.addParquetSource("pm:treetops", List.of(Path.of(treetopsFile)), false, fields -> fields.get("id"),
+        fields -> "treetops");
+    }
+
     // Overture's building theme merges OSM with machine-detected footprints, so it replaces OSM building polygons.
     String overtureBuildingsFile = args.getString("overture_buildings",
       "Overture buildings .parquet to use for footprints alongside an OSM --area", "");
@@ -397,6 +412,7 @@ public class Basemap extends ForwardingProfile {
 
     List<String> availableLayers = List.of(
       Infrastructure.LAYER_NAME,
+      Trees.LAYER_NAME,
       Boundaries.LAYER_NAME,
       Buildings.LAYER_NAME,
       Landuse.LAYER_NAME,

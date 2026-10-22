@@ -40,7 +40,7 @@ mkdir -p "$WORK"
 cd "$WORK"
 
 echo "== packages"
-dnf install -y -q git java-21-amazon-corretto-devel maven-amazon-corretto21 unzip
+dnf install -y -q git java-21-amazon-corretto-devel maven-amazon-corretto21 unzip python3-pip
 curl -fsSL -o duckdb.zip https://github.com/duckdb/duckdb/releases/download/v1.2.2/duckdb_cli-linux-aarch64.zip
 unzip -o -q duckdb.zip && install duckdb /usr/local/bin/duckdb
 curl -fsSL https://rclone.org/install.sh | bash > /dev/null
@@ -88,6 +88,14 @@ fetch() {
 ) > planetiler-download.log 2>&1 &
 DOWNLOAD_PID=$!
 
+echo "== canopy treetops (background)"
+(
+  python3 -m pip install -q geopandas pyarrow rasterio scipy pyproj shapely &&
+    AWS_NO_SIGN_REQUEST=YES AWS_REGION=us-east-1 GDAL_DISABLE_READDIR_ON_OPEN=EMPTY_DIR \
+      python3 aws/treetops.py "data/sources/${AREA}-treetops.parquet"
+) > treetops.log 2>&1 &
+TREETOPS_PID=$!
+
 echo "== overture buildings"
 RELEASE=$(duckdb -noheader -list -c "SELECT latest FROM read_json('https://stac.overturemaps.org/catalog.json')")
 IFS=',' read -r XMIN YMIN XMAX YMAX <<< "$BBOX"
@@ -131,6 +139,14 @@ if ! wait "$DOWNLOAD_PID"; then
   tail -n 40 planetiler-download.log
   exit 1
 fi
+echo "== waiting for treetops"
+TREETOP_ARGS=()
+if wait "$TREETOPS_PID" && [[ -s "data/sources/${AREA}-treetops.parquet" ]]; then
+  TREETOP_ARGS=(--treetops="data/sources/${AREA}-treetops.parquet")
+else
+  echo "treetop extraction failed; building with OSM trees only"
+fi
+tail -n 15 treetops.log
 ls -la data/sources
 
 echo "== planetiler"
@@ -139,6 +155,7 @@ java -Xmx24g -jar "$JAR" \
   --overture_buildings="data/sources/${AREA}-buildings.parquet" \
   --overture_base="data/sources/${AREA}-base.parquet" \
   --download_osm_tile_weights=false \
+  "${TREETOP_ARGS[@]}" \
   --storage=mmap --nodemap-type=array --force
 ls -la "${AREA}.pmtiles"
 
