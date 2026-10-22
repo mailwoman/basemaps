@@ -16,8 +16,19 @@ set -euo pipefail
 : "${MAX_HOURS:=8}"
 : "${BUCKET:=nexus-public}"
 
-exec > >(tee -a /var/log/basemap-build.log) 2>&1
-trap 'echo "build exited with status $?"; shutdown -h now' EXIT
+LOG=/var/log/basemap-build.log
+exec > >(tee -a "$LOG") 2>&1
+
+# The log goes to R2 beside the output on every exit, because the instance and its disk are gone afterwards.
+finish() {
+  local status=$?
+  echo "build exited with status $status"
+  if command -v rclone > /dev/null && [[ -n "${RCLONE_S3_ENDPOINT:-}" ]]; then
+    rclone copyto "$LOG" ":s3:${BUCKET}/${OUTPUT_KEY%.pmtiles}.log" || true
+  fi
+  shutdown -h now
+}
+trap finish EXIT
 shutdown -h "+$((MAX_HOURS * 60))"
 
 export AWS_REGION="${AWS_REGION:-us-west-2}"
@@ -29,12 +40,19 @@ echo "== packages"
 dnf install -y -q git java-21-amazon-corretto-devel maven-amazon-corretto21 unzip
 curl -fsSL -o duckdb.zip https://github.com/duckdb/duckdb/releases/download/v1.2.2/duckdb_cli-linux-aarch64.zip
 unzip -o -q duckdb.zip && install duckdb /usr/local/bin/duckdb
-curl -fsSL https://rclone.org/install.sh | bash
+curl -fsSL https://rclone.org/install.sh | bash > /dev/null
+
+param() { aws ssm get-parameter --with-decryption --name "/mailwoman/basemaps/$1" --query Parameter.Value --output text; }
+export RCLONE_S3_PROVIDER=Cloudflare RCLONE_S3_REGION=auto RCLONE_S3_NO_CHECK_BUCKET=true
+RCLONE_S3_ACCESS_KEY_ID=$(param r2-access-key-id)
+RCLONE_S3_SECRET_ACCESS_KEY=$(param r2-secret-access-key)
+RCLONE_S3_ENDPOINT=$(param r2-endpoint)
+export RCLONE_S3_ACCESS_KEY_ID RCLONE_S3_SECRET_ACCESS_KEY RCLONE_S3_ENDPOINT
 
 echo "== source"
 git clone --depth 1 --branch "$BRANCH" https://github.com/mailwoman/basemaps.git
 cd basemaps/tiles
-mvn -q clean package
+mvn -B -ntp clean package
 mkdir -p data/sources
 
 JAR=target/protomaps-basemap-HEAD-with-deps.jar
@@ -75,11 +93,5 @@ java -Xmx24g -jar "$JAR" \
 ls -la "${AREA}.pmtiles"
 
 echo "== upload"
-param() { aws ssm get-parameter --with-decryption --name "/mailwoman/basemaps/$1" --query Parameter.Value --output text; }
-export RCLONE_S3_PROVIDER=Cloudflare RCLONE_S3_REGION=auto RCLONE_S3_NO_CHECK_BUCKET=true
-RCLONE_S3_ACCESS_KEY_ID=$(param r2-access-key-id)
-RCLONE_S3_SECRET_ACCESS_KEY=$(param r2-secret-access-key)
-RCLONE_S3_ENDPOINT=$(param r2-endpoint)
-export RCLONE_S3_ACCESS_KEY_ID RCLONE_S3_SECRET_ACCESS_KEY RCLONE_S3_ENDPOINT
 rclone copyto --s3-chunk-size 64M --s3-upload-concurrency 8 "${AREA}.pmtiles" ":s3:${BUCKET}/${OUTPUT_KEY}"
 echo "uploaded ${BUCKET}/${OUTPUT_KEY}"
