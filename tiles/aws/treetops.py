@@ -33,11 +33,19 @@ CITIES = {
     "kagoshima": (130.48, 31.52, 130.60, 31.65),
 }
 
-MIN_HEIGHT_METERS = 4
-MAX_WINDOW_METERS = 5
+MIN_HEIGHT_METERS = 5
+# One treetop per crown: a peak must be the tallest pixel across a typical street-tree crown.
+MAX_WINDOW_METERS = 9
+# A crown is domed: its peak stands DOME_METERS above the mean of the pixels around it. A flat roof misread as
+# canopy has a peak level with its surroundings.
+DOME_WINDOW_METERS = 5
+DOME_METERS = 1.0
 # A pixel whose surrounding DENSE_WINDOW_METERS square is at least DENSE_COVER canopy belongs to a forest.
 DENSE_WINDOW_METERS = 41
-DENSE_COVER = 0.85
+DENSE_COVER = 0.6
+# Two tile features per treetop make a large total expensive to build and serve, so the build skips treetops above
+# this count rather than shipping them.
+MAX_TREETOPS = 8_000_000
 BLOCK = 4096
 OVERLAP = DENSE_WINDOW_METERS
 
@@ -79,6 +87,7 @@ def treetops_in(path, bbox):
         pixel = abs(src.transform.a)
         size_max = max(3, int(round(MAX_WINDOW_METERS / pixel)) | 1)
         size_dense = max(3, int(round(DENSE_WINDOW_METERS / pixel)) | 1)
+        size_dome = max(3, int(round(DOME_WINDOW_METERS / pixel)) | 1)
         for row in range(int(window.row_off), int(window.row_off + window.height), BLOCK):
             for col in range(int(window.col_off), int(window.col_off + window.width), BLOCK):
                 block = Window(col - OVERLAP, row - OVERLAP, BLOCK + 2 * OVERLAP, BLOCK + 2 * OVERLAP)
@@ -89,6 +98,7 @@ def treetops_in(path, bbox):
                 peaks = (chm == ndimage.maximum_filter(chm, size=size_max)) & (chm >= MIN_HEIGHT_METERS)
                 cover = ndimage.uniform_filter((chm >= 2).astype(np.float32), size=size_dense)
                 peaks &= cover < DENSE_COVER
+                peaks &= chm - ndimage.uniform_filter(chm, size=size_dome) >= DOME_METERS
                 # Keep only peaks in this block's own area, so overlapping blocks do not repeat a tree.
                 inner_r0, inner_c0 = row - int(block.row_off), col - int(block.col_off)
                 keep = np.zeros_like(peaks)
@@ -120,6 +130,9 @@ def main():
             except rasterio.errors.RasterioIOError:
                 print(f"{name}: no canopy tile {key}")
         print(f"{name}: {len(records) - before} treetops", flush=True)
+
+    if len(records) > MAX_TREETOPS:
+        raise SystemExit(f"{len(records)} treetops exceeds MAX_TREETOPS={MAX_TREETOPS}; not writing {args.output}")
 
     frame = gpd.GeoDataFrame(
         {
