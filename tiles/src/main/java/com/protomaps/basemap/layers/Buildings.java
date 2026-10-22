@@ -25,6 +25,15 @@ public class Buildings implements ForwardingProfile.LayerPostProcessor {
 
   static final String HEIGHT_KEY = "height";
   static final String MIN_HEIGHT_KEY = "min_height";
+  /**
+   * The roof form from OSM's `roof:shape` or Overture's `roof_shape`, such as `gabled`, `hipped` or `dome`, emitted
+   * from z15 so a renderer can build the roof instead of a flat top.
+   */
+  static final String ROOF_SHAPE_KEY = "roof_shape";
+  /**
+   * The roof's height in meters, from OSM's `roof:height` or Overture's `roof_height`.
+   */
+  static final String ROOF_HEIGHT_KEY = "roof_height";
 
   public static final String LAYER_NAME = "buildings";
 
@@ -125,6 +134,8 @@ public class Buildings implements ForwardingProfile.LayerPostProcessor {
         .setAttrWithMinzoom("layer", Parse.parseIntOrNull(sf.getString("layer")), 13)
         // NOTE: Height is quantized by zoom in a post-process step
         .setAttr(HEIGHT_KEY, height.height())
+        .setAttrWithMinzoom(ROOF_SHAPE_KEY, sf.getString("roof:shape"), 15)
+        .setAttrWithMinzoom(ROOF_HEIGHT_KEY, parseDoubleOrNull(sanitizeHeightValue(sf.getString("roof:height"))), 15)
         .setAttr("sort_rank", 400)
         .setZoomRange(minZoom, 15)
         .setMinPixelSize(0)
@@ -235,6 +246,8 @@ public class Buildings implements ForwardingProfile.LayerPostProcessor {
       .setAttr("kind", isPart ? "building_part" : "building")
       // NOTE: Height is quantized by zoom in a post-process step
       .setAttr(HEIGHT_KEY, height.height())
+      .setAttrWithMinzoom(ROOF_SHAPE_KEY, sf.getTag("roof_shape") instanceof String shape ? shape : null, 15)
+      .setAttrWithMinzoom(ROOF_HEIGHT_KEY, sf.getTag("roof_height") instanceof Number roof ? roof.doubleValue() : null, 15)
       .setAttr("sort_rank", 400)
       .setZoomRange(isPart ? 13 : 11, 15)
       .setMinPixelSize(0)
@@ -270,57 +283,21 @@ public class Buildings implements ForwardingProfile.LayerPostProcessor {
     }
     items = Area.filterArea(items, 0);
 
-    if (zoom >= 15)
+    // From z13 every footprint is kept unmerged at its own height, so the buildings at z13 and z14 are the ones z15
+    // shows. Merging touching footprints into blocks, with heights rounded to 10 m or 5 m, made the blocks split
+    // apart and change height as the map crossed into z15.
+    if (zoom >= 13)
       return items;
 
-    // quantize height by zoom when less than max_zoom 15 to facilitate better feature merging
+    // At z11 and z12 heights round to 20 m, so neighbors of similar height share a value and merge.
     for (var item : items) {
-      if (item.tags().containsKey(HEIGHT_KEY)) {
-        var height = (double) item.tags().get(HEIGHT_KEY);
-
-        // Protected against NULL values
-        if (height > 0) {
-          // at zoom <= 12 round height to nearest 20 meters
-          if (zoom <= 12) {
-            height = quantizeVal(height, 20);
-          } else
-          // at zoom 13 round height to nearest 10 meters
-          if (zoom == 13) {
-            height = quantizeVal(height, 10);
-          } else
-          // at zoom 14 round height to nearest 5 meters
-          if (zoom == 14) {
-            height = quantizeVal(height, 5);
-          }
-
-          item.tags().put(HEIGHT_KEY, height);
-        }
-      }
-
-      if (item.tags().containsKey(MIN_HEIGHT_KEY)) {
-        var minHeight = (double) item.tags().get(MIN_HEIGHT_KEY);
-
-        // Protected against NULL values
-        if (minHeight > 0) {
-          if (zoom <= 12) {
-            minHeight = quantizeVal(minHeight, 20);
-          } else
-          // at zoom 13 round height to nearest 10 meters
-          if (zoom == 13) {
-            minHeight = quantizeVal(minHeight, 10);
-          } else
-          // at zoom 14 round height to nearest 5 meters
-          if (zoom == 14) {
-            minHeight = quantizeVal(minHeight, 5);
-          }
-
-          item.tags().put(MIN_HEIGHT_KEY, minHeight);
+      for (var key : List.of(HEIGHT_KEY, MIN_HEIGHT_KEY)) {
+        if (item.tags().get(key) instanceof Double value && value > 0) {
+          item.tags().put(key, (double) quantizeVal(value, 20));
         }
       }
     }
-    // Below z13 nearby footprints merge into blocks. From z13 every footprint is kept, so the set of buildings is the
-    // same at z13, z14 and z15 and buildings do not appear in steps as the map zooms in.
-    double minArea = zoom >= 13 ? 0 : 3.125;
-    return FeatureMerge.mergeNearbyPolygons(items, minArea, minArea, 0.5, 0.5);
+    // At z11 and z12 nearby footprints merge into blocks.
+    return FeatureMerge.mergeNearbyPolygons(items, 3.125, 3.125, 0.5, 0.5);
   }
 }
