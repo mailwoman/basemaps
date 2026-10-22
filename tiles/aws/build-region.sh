@@ -40,7 +40,7 @@ mkdir -p "$WORK"
 cd "$WORK"
 
 echo "== packages"
-dnf install -y -q git java-21-amazon-corretto-devel maven-amazon-corretto21 unzip python3-pip
+dnf install -y -q git java-21-amazon-corretto-devel maven-amazon-corretto21 unzip
 curl -fsSL -o duckdb.zip https://github.com/duckdb/duckdb/releases/download/v1.2.2/duckdb_cli-linux-aarch64.zip
 unzip -o -q duckdb.zip && install duckdb /usr/local/bin/duckdb
 curl -fsSL https://rclone.org/install.sh | bash > /dev/null
@@ -90,9 +90,13 @@ DOWNLOAD_PID=$!
 
 echo "== canopy treetops (background)"
 (
-  python3 -m pip install -q geopandas pyarrow rasterio scipy pyproj shapely &&
+  # The system Python (3.9 on Amazon Linux 2023) is older than current geopandas and rasterio wheels support, and
+  # pip then falls back to source builds that fail. uv runs the script on a downloaded Python 3.12 instead.
+  curl -LsSf https://astral.sh/uv/install.sh | sh &&
     AWS_NO_SIGN_REQUEST=YES AWS_REGION=us-east-1 GDAL_DISABLE_READDIR_ON_OPEN=EMPTY_DIR \
-      python3 aws/treetops.py "data/sources/${AREA}-treetops.parquet"
+      "$HOME/.local/bin/uv" run --python 3.12 \
+      --with geopandas --with pyarrow --with rasterio --with scipy --with pyproj --with shapely \
+      aws/treetops.py "data/sources/${AREA}-treetops.parquet"
 ) > treetops.log 2>&1 &
 TREETOPS_PID=$!
 
