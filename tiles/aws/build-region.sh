@@ -60,10 +60,14 @@ mkdir -p data/sources
 JAR=target/protomaps-basemap-HEAD-with-deps.jar
 
 # The OSM extract and the other Planetiler inputs download while DuckDB pulls the Overture buildings.
-# Planetiler's downloader times out on QRank's size request from EC2, so curl fetches it first with retries.
-# Planetiler skips a download whose file already exists.
-curl -fsSL --retry 5 --retry-delay 10 --max-time 900 -o data/sources/qrank.csv.gz \
-  https://qrank.toolforge.org/download/qrank.csv.gz
+# QRank ranks POIs by Wikidata popularity to choose their minimum zoom. Its host is often unreachable, and
+# Planetiler's downloader then fails the whole build. curl fetches it first; when that fails, a header-only file
+# lets the build continue with every POI at its kind's default zoom. Planetiler skips a file that already exists.
+if ! curl -fsSL --retry 2 --connect-timeout 30 --max-time 900 -o data/sources/qrank.csv.gz \
+  https://qrank.toolforge.org/download/qrank.csv.gz; then
+  echo "QRank unavailable; building without POI popularity ranks"
+  printf 'Entity,QRank\n' | gzip > data/sources/qrank.csv.gz
+fi
 
 echo "== planetiler inputs (background)"
 java -jar "$JAR" --area="$AREA" --download --only-download > planetiler-download.log 2>&1 &
