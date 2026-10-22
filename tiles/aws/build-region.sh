@@ -72,7 +72,10 @@ fi
 echo "== planetiler inputs (background)"
 # Land and ocean polygons come from Overture below (--overture_base), so Planetiler does not request them from
 # osmdata.openstreetmap.de, whose outages otherwise fail the whole build.
-java -jar "$JAR" --area="$AREA" --overture_base=unused --download --only-download \
+# Planetiler checks that every input path exists even with --only-download, and the real base Parquet is still
+# being written by DuckDB, so this pass gets an empty placeholder.
+touch data/sources/download-placeholder.parquet
+java -jar "$JAR" --area="$AREA" --overture_base=data/sources/download-placeholder.parquet --download --only-download \
   --http_timeout=300s --http_retries=3 > planetiler-download.log 2>&1 &
 DOWNLOAD_PID=$!
 
