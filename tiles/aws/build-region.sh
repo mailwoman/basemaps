@@ -10,6 +10,7 @@
 set -euo pipefail
 
 : "${AREA:?Geofabrik area name, such as japan}"
+: "${GEOFABRIK_PATH:?Geofabrik download path without the suffix, such as asia/japan}"
 : "${BBOX:?xmin,ymin,xmax,ymax for the Overture buildings query}"
 : "${BRANCH:=main}"
 : "${OUTPUT_KEY:?R2 key for the PMTiles, such as protomaps/builds/japan.pmtiles}"
@@ -70,13 +71,21 @@ if ! curl -fsSL --retry 2 --connect-timeout 30 --max-time 900 -o data/sources/qr
 fi
 
 echo "== planetiler inputs (background)"
-# Land and ocean polygons come from Overture below (--overture_base), so Planetiler does not request them from
-# osmdata.openstreetmap.de, whose outages otherwise fail the whole build.
-# Planetiler checks that every input path exists even with --only-download, and the real base Parquet is still
-# being written by DuckDB, so this pass gets an empty placeholder.
-touch data/sources/download-placeholder.parquet
-java -jar "$JAR" --area="$AREA" --overture_base=data/sources/download-placeholder.parquet --download --only-download \
-  --http_timeout=300s --http_retries=3 > planetiler-download.log 2>&1 &
+# Planetiler's downloader fails the whole build when one size request times out, which has happened with
+# Geofabrik, QRank and osmdata.openstreetmap.de. curl fetches every input with retries instead, and Planetiler
+# runs without --download. Land and ocean polygons come from Overture below (--overture_base).
+fetch() {
+  curl -fsSL --retry 5 --retry-delay 15 --retry-all-errors --connect-timeout 60 -o "data/sources/$1" "$2"
+}
+(
+  fetch "${AREA}.osm.pbf" "https://download.geofabrik.de/${GEOFABRIK_PATH}-latest.osm.pbf" &
+  fetch natural_earth_vector.gpkg.zip https://naciscdn.org/naturalearth/packages/natural_earth_vector.gpkg.zip &
+  fetch daylight-landcover.gpkg https://r2-public.protomaps.com/datasets/daylight-landcover.gpkg &
+  fetch pgf-encoding.zip https://wipfli.github.io/pgf-encoding/pgf-encoding.zip &
+  status=0
+  for job in $(jobs -p); do wait "$job" || status=1; done
+  exit "$status"
+) > planetiler-download.log 2>&1 &
 DOWNLOAD_PID=$!
 
 echo "== overture buildings"
@@ -129,6 +138,7 @@ java -Xmx24g -jar "$JAR" \
   --area="$AREA" \
   --overture_buildings="data/sources/${AREA}-buildings.parquet" \
   --overture_base="data/sources/${AREA}-base.parquet" \
+  --download_osm_tile_weights=false \
   --storage=mmap --nodemap-type=array --force
 ls -la "${AREA}.pmtiles"
 
