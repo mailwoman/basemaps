@@ -15,6 +15,13 @@ import org.junit.jupiter.api.Test;
 
 class BuildingsTest extends LayerTest {
   @Test
+  void gersFeatureIdKeepsFiftyTwoBits() {
+    assertEquals(0x08b2f5aa1b4c5L, Buildings.gersFeatureId("08b2f5aa-1b4c-5fff-0200-a0e3b2f0e2c1"));
+    assertEquals(true, Buildings.gersFeatureId("08b2f5aa-1b4c-5fff-0200-a0e3b2f0e2c1") < (1L << 53));
+    assertEquals(0, Buildings.gersFeatureId(null));
+  }
+
+  @Test
   void simple() {
     assertFeatures(15,
       List.of(Map.of("height", 10.0)),

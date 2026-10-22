@@ -243,6 +243,7 @@ public class Buildings implements ForwardingProfile.LayerPostProcessor {
       sf.hasTag("min_height") ? String.valueOf(sf.getTag("min_height")) : null);
 
     var feature = roundedFootprint(sf, features)
+      .setId(gersFeatureId(sf.getString("id")))
       .setAttr("kind", isPart ? "building_part" : "building")
       // NOTE: Height is quantized by zoom in a post-process step
       .setAttr(HEIGHT_KEY, height.height())
@@ -256,6 +257,21 @@ public class Buildings implements ForwardingProfile.LayerPostProcessor {
     if (isPart) {
       feature.setAttr(MIN_HEIGHT_KEY, height.min_height());
     }
+  }
+
+  /**
+   * A tile feature id from an Overture GERS id: its first 52 bits, which stay exact as a JavaScript number.
+   * A map client keys feature state by this id, for example to hide a footprint that a city model draws.
+   */
+  static long gersFeatureId(String gersId) {
+    if (gersId == null) {
+      return 0;
+    }
+    String hex = gersId.replace("-", "");
+    if (hex.length() < 13 || !hex.substring(0, 13).matches("[0-9a-fA-F]{13}")) {
+      return Integer.toUnsignedLong(gersId.hashCode());
+    }
+    return Long.parseLong(hex.substring(0, 13), 16);
   }
 
   @Override
