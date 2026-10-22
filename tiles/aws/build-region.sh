@@ -88,24 +88,40 @@ fetch() {
 ) > planetiler-download.log 2>&1 &
 DOWNLOAD_PID=$!
 
+RELEASE=$(duckdb -noheader -list -c "SELECT latest FROM read_json('https://stac.overturemaps.org/catalog.json')")
+IFS=',' read -r XMIN YMIN XMAX YMAX <<< "$BBOX"
+echo "release $RELEASE bbox $BBOX"
+# The DuckDB CLI exits 0 after a failed statement, so each step checks its own result.
+[[ -n "$RELEASE" ]] || { echo "no Overture release found"; exit 1; }
+
 echo "== canopy treetops (background)"
 (
+  # Road centerlines for dropping treetops that stand on a carriageway.
+  duckdb -c "
+  INSTALL httpfs; LOAD httpfs;
+  SET s3_region='us-west-2';
+  COPY (
+    SELECT class, geometry
+    FROM read_parquet(
+      's3://overturemaps-us-west-2/release/${RELEASE}/theme=transportation/type=segment/*.parquet',
+      hive_partitioning=1
+    )
+    WHERE subtype = 'road'
+      AND bbox.xmin <= ${XMAX} AND bbox.xmax >= ${XMIN}
+      AND bbox.ymin <= ${YMAX} AND bbox.ymax >= ${YMIN}
+  ) TO 'data/sources/${AREA}-roads.parquet' (FORMAT PARQUET);" &&
+  [[ -s "data/sources/${AREA}-roads.parquet" ]] &&
   # The system Python (3.9 on Amazon Linux 2023) is older than current geopandas and rasterio wheels support, and
   # pip then falls back to source builds that fail. uv runs the script on a downloaded Python 3.12 instead.
   curl -LsSf https://astral.sh/uv/install.sh | sh &&
     AWS_NO_SIGN_REQUEST=YES AWS_REGION=us-east-1 GDAL_DISABLE_READDIR_ON_OPEN=EMPTY_DIR \
       "$HOME/.local/bin/uv" run --python 3.12 \
       --with geopandas --with pyarrow --with rasterio --with scipy --with pyproj --with shapely \
-      aws/treetops.py "data/sources/${AREA}-treetops.parquet"
+      aws/treetops.py "data/sources/${AREA}-treetops.parquet" --roads "data/sources/${AREA}-roads.parquet"
 ) > treetops.log 2>&1 &
 TREETOPS_PID=$!
 
 echo "== overture buildings"
-RELEASE=$(duckdb -noheader -list -c "SELECT latest FROM read_json('https://stac.overturemaps.org/catalog.json')")
-IFS=',' read -r XMIN YMIN XMAX YMAX <<< "$BBOX"
-echo "release $RELEASE bbox $BBOX"
-# The DuckDB CLI exits 0 after a failed statement, so each step checks its own result.
-[[ -n "$RELEASE" ]] || { echo "no Overture release found"; exit 1; }
 duckdb -c "
 INSTALL httpfs; LOAD httpfs;
 SET s3_region='us-west-2';

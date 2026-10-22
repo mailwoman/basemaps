@@ -4,14 +4,19 @@ The canopy height map is 1 m GeoTIFF tiles named by zoom-9 quadkey in s3://dataf
 that is the tallest within MAX_WINDOW_METERS and at least MIN_HEIGHT_METERS tall. Pixels inside continuous canopy
 are dropped: forests are drawn as land cover, and one point per crown there would add billions of trees.
 
-Usage: python3 treetops.py OUTPUT.parquet [--cities NAME,...]
+A canopy peak over a carriageway is a crown overhanging the road, and a trunk drawn there would stand in traffic.
+With --roads, treetops within a road's half-width plus ROAD_MARGIN_METERS of its centerline are dropped.
+
+Usage: python3 treetops.py OUTPUT.parquet [--cities NAME,...] [--roads ROADS.parquet]
 """
 import argparse
 import math
 
 import geopandas as gpd
 import numpy as np
+import pyarrow.parquet as pq
 import rasterio
+import shapely
 from pyproj import Transformer
 from rasterio.windows import Window, from_bounds
 from scipy import ndimage
@@ -48,6 +53,58 @@ DENSE_COVER = 0.6
 MAX_TREETOPS = 8_000_000
 BLOCK = 4096
 OVERLAP = DENSE_WINDOW_METERS
+
+# Carriageway width by Overture road class, in meters. Unlisted classes use DEFAULT_ROAD_WIDTH_METERS.
+ROAD_WIDTH_METERS = {
+    "motorway": 14,
+    "trunk": 12,
+    "primary": 10,
+    "secondary": 8,
+    "tertiary": 7,
+    "residential": 5,
+    "unclassified": 5,
+    "living_street": 4,
+    "service": 4,
+}
+DEFAULT_ROAD_WIDTH_METERS = 3
+ROAD_MARGIN_METERS = 1.5
+# Footways and paths run through parks under continuous canopy, so they do not exclude trees.
+UNFILTERED_ROAD_CLASSES = {"footway", "path", "pedestrian", "cycleway", "steps", "bridleway", "track"}
+
+
+def on_road(lons, lats, roads):
+    """Boolean mask of the points within their road distance of any road line, measured in local meters."""
+    lat0 = float(np.mean(lats))
+    sx, sy = 111_320 * math.cos(math.radians(lat0)), 110_540
+
+    def local(geoms):
+        return shapely.transform(geoms, lambda xy: xy * [sx, sy])
+
+    points = shapely.points(np.asarray(lons) * sx, np.asarray(lats) * sy)
+    hit = np.zeros(len(points), dtype=bool)
+    for width, lines in roads.items():
+        tree = shapely.STRtree(local(lines))
+        idx, _ = tree.query(points, predicate="dwithin", distance=width / 2 + ROAD_MARGIN_METERS)
+        hit[np.unique(idx)] = True
+    return hit
+
+
+def load_roads(path):
+    """Road centerlines and their carriageway widths, excluding paths."""
+    table = pq.read_table(path, columns=["class", "geometry"]).to_pydict()
+    keep = [cls not in UNFILTERED_ROAD_CLASSES for cls in table["class"]]
+    geoms = shapely.from_wkb([g for g, k in zip(table["geometry"], keep) if k])
+    widths = np.array(
+        [ROAD_WIDTH_METERS.get(c, DEFAULT_ROAD_WIDTH_METERS) for c, k in zip(table["class"], keep) if k]
+    )
+    return geoms, widths
+
+
+def roads_in(roads, bbox):
+    """The roads inside a lon/lat box, grouped by carriageway width."""
+    geoms, widths = roads
+    inside = shapely.intersects(geoms, shapely.box(*bbox))
+    return {int(w): geoms[inside & (widths == w)] for w in np.unique(widths[inside])}
 
 
 def quadkeys(bbox, zoom=9):
@@ -118,18 +175,30 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("output")
     parser.add_argument("--cities", default=",".join(CITIES))
+    parser.add_argument("--roads")
     args = parser.parse_args()
+
+    roads = load_roads(args.roads) if args.roads else None
+    if roads is not None:
+        print(f"{len(roads[0])} road centerlines loaded", flush=True)
 
     records = []
     for name in args.cities.split(","):
         bbox = CITIES[name]
-        before = len(records)
+        found = []
         for key in quadkeys(bbox):
             try:
-                records.extend(treetops_in(f"{BUCKET}/{key}.tif", bbox))
+                found.extend(treetops_in(f"{BUCKET}/{key}.tif", bbox))
             except rasterio.errors.RasterioIOError:
                 print(f"{name}: no canopy tile {key}")
-        print(f"{name}: {len(records) - before} treetops", flush=True)
+        dropped = 0
+        if roads is not None and found:
+            lons, lats, _ = zip(*found)
+            hit = on_road(lons, lats, roads_in(roads, bbox))
+            dropped = int(hit.sum())
+            found = [record for record, drop in zip(found, hit) if not drop]
+        records.extend(found)
+        print(f"{name}: {len(found)} treetops kept, {dropped} dropped as on a road", flush=True)
 
     if len(records) > MAX_TREETOPS:
         raise SystemExit(f"{len(records)} treetops exceeds MAX_TREETOPS={MAX_TREETOPS}; not writing {args.output}")
