@@ -63,6 +63,16 @@ public class Landuse implements ForwardingProfile.LayerPostProcessor {
     """;
 
   private static final MultiExpression.Index<Map<String, Object>> index = MultiExpression.ofOrdered(List.of(
+    // Rice paddies (田) are farmland tagged with their crop. Japanese maps draw them with their own symbol.
+    rule(
+      with("landuse", "farmland", "paddy"),
+      with("crop", "rice"),
+      use("kind", "paddy")
+    ),
+    rule(
+      with("landuse", "vineyard", "plant_nursery"),
+      use("kind", fromTag("landuse"))
+    ),
     rule(
       with("""
           amenity

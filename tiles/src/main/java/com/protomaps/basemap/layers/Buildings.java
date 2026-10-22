@@ -26,6 +26,20 @@ public class Buildings implements ForwardingProfile.LayerPostProcessor {
 
   public static final String LAYER_NAME = "buildings";
 
+  /**
+   * True when footprints come from Overture, in which case OSM building polygons are skipped to avoid drawing the same
+   * building twice.
+   */
+  private final boolean overtureFootprints;
+
+  public Buildings() {
+    this(false);
+  }
+
+  public Buildings(boolean overtureFootprints) {
+    this.overtureFootprints = overtureFootprints;
+  }
+
   @Override
   public String name() {
     return LAYER_NAME;
@@ -89,7 +103,7 @@ public class Buildings implements ForwardingProfile.LayerPostProcessor {
   }
 
   public void processOsm(SourceFeature sf, FeatureCollector features) {
-    if (sf.canBePolygon() && ((sf.hasTag("building") && !sf.hasTag("building", "no")) ||
+    if (!overtureFootprints && sf.canBePolygon() && ((sf.hasTag("building") && !sf.hasTag("building", "no")) ||
       (sf.hasTag("building:part") && !sf.hasTag("building:part", "no")))) {
 
       var height = parseHeight(sf.getString(HEIGHT_KEY), sf.getString("building:levels"), sf.getString(MIN_HEIGHT_KEY));
@@ -98,7 +112,7 @@ public class Buildings implements ForwardingProfile.LayerPostProcessor {
 
       if (sf.hasTag("building:part")) {
         kind = "building_part";
-        minZoom = 14;
+        minZoom = 13;
       }
 
       var feature = features.polygon(this.name())
@@ -119,7 +133,8 @@ public class Buildings implements ForwardingProfile.LayerPostProcessor {
       }
     }
 
-    if (sf.hasTag("addr:housenumber")) {
+    // Japanese addresses number the block (番地) rather than the house, so a block number alone also counts as an address.
+    if (sf.hasTag("addr:housenumber") || sf.hasTag("addr:block_number")) {
       FeatureCollector.Feature housenumberFeature = null;
       if (sf.isPoint()) {
         housenumberFeature = features.point(this.name());
@@ -131,6 +146,7 @@ public class Buildings implements ForwardingProfile.LayerPostProcessor {
           .setId(FeatureId.create(sf))
           .setAttr("addr_housenumber", sf.getString("addr:housenumber"))
           .setAttr("addr_street", sf.getString("addr:street"))
+          .setAttr("addr_block_number", sf.getString("addr:block_number"))
           .setAttr("kind", "address")
           .setMinZoom(15);
       }
@@ -148,16 +164,23 @@ public class Buildings implements ForwardingProfile.LayerPostProcessor {
       return;
     }
 
-    features.polygon(this.name())
-      //.setId(FeatureId.create(sf))
-      // Core Tilezen schema properties
-      .setAttr("kind", "building")
-      // Core OSM tags for different kinds of places
-      //.setAttrWithMinzoom("layer", Parse.parseIntOrNull(sf.getString("layer")), 13)
+    boolean isPart = "building_part".equals(sf.getString("type"));
+    // Overture gives height in meters and floors as `num_floors`; floors convert the same way as `building:levels`.
+    var height = parseHeight(
+      sf.hasTag("height") ? String.valueOf(sf.getTag("height")) : null,
+      sf.hasTag("num_floors") ? String.valueOf(sf.getTag("num_floors")) : null,
+      sf.hasTag("min_height") ? String.valueOf(sf.getTag("min_height")) : null);
+
+    var feature = features.polygon(this.name())
+      .setAttr("kind", isPart ? "building_part" : "building")
       // NOTE: Height is quantized by zoom in a post-process step
-      //.setAttr(HEIGHT_KEY, height.height())
+      .setAttr(HEIGHT_KEY, height.height())
       .setAttr("sort_rank", 400)
-      .setZoomRange(11, 15);
+      .setZoomRange(isPart ? 13 : 11, 15);
+
+    if (isPart) {
+      feature.setAttr(MIN_HEIGHT_KEY, height.min_height());
+    }
   }
 
   @Override
@@ -233,6 +256,9 @@ public class Buildings implements ForwardingProfile.LayerPostProcessor {
         }
       }
     }
-    return FeatureMerge.mergeNearbyPolygons(items, 3.125, 3.125, 0.5, 0.5);
+    // Below z13 nearby footprints merge into blocks. At z13 and z14 the merge keeps footprints down to one square
+    // pixel, so individual buildings appear before z15 rather than all at once.
+    double minArea = zoom >= 13 ? 1.0 : 3.125;
+    return FeatureMerge.mergeNearbyPolygons(items, minArea, minArea, 0.5, 0.5);
   }
 }

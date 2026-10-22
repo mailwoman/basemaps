@@ -12,6 +12,7 @@ import com.protomaps.basemap.feature.QrankDb;
 import com.protomaps.basemap.layers.Boundaries;
 import com.protomaps.basemap.layers.Buildings;
 import com.protomaps.basemap.layers.Earth;
+import com.protomaps.basemap.layers.Infrastructure;
 import com.protomaps.basemap.layers.Landcover;
 import com.protomaps.basemap.layers.Landuse;
 import com.protomaps.basemap.layers.Places;
@@ -42,6 +43,21 @@ public class Basemap extends ForwardingProfile {
 
   public Basemap(QrankDb qrankDb, CountryCoder countryCoder, Clip clip,
     String layer) {
+    this(qrankDb, countryCoder, clip, layer, false);
+  }
+
+  /**
+   * @param overtureBuildings when true, building footprints come from the {@code pm:overture_buildings} source and
+   *                          OSM contributes only address points.
+   */
+  public Basemap(QrankDb qrankDb, CountryCoder countryCoder, Clip clip,
+    String layer, boolean overtureBuildings) {
+
+    if (layer.isEmpty() || layer.equals(Infrastructure.LAYER_NAME)) {
+      var infrastructure = new Infrastructure();
+      registerHandler(infrastructure);
+      registerSourceHandler("osm", infrastructure::processOsm);
+    }
 
     if (layer.isEmpty() || layer.equals(Boundaries.LAYER_NAME)) {
       var admin = new Boundaries();
@@ -51,10 +67,11 @@ public class Basemap extends ForwardingProfile {
     }
 
     if (layer.isEmpty() || layer.equals(Buildings.LAYER_NAME)) {
-      var buildings = new Buildings();
+      var buildings = new Buildings(overtureBuildings);
       registerHandler(buildings);
       registerSourceHandler("osm", buildings::processOsm);
       registerSourceHandler("pm:overture", buildings::processOverture);
+      registerSourceHandler("pm:overture_buildings", buildings::processOverture);
     }
 
     if (layer.isEmpty() || layer.equals(Landuse.LAYER_NAME)) {
@@ -315,6 +332,18 @@ public class Basemap extends ForwardingProfile {
           "https://r2-public.protomaps.com/datasets/daylight-landcover.gpkg");
     }
 
+    // Overture's building theme merges OSM with machine-detected footprints, so it replaces OSM building polygons.
+    String overtureBuildingsFile = args.getString("overture_buildings",
+      "Overture buildings .parquet to use for footprints alongside an OSM --area", "");
+    if (!overtureBuildingsFile.isEmpty()) {
+      planetiler.addParquetSource("pm:overture_buildings",
+        List.of(Path.of(overtureBuildingsFile)),
+        false,
+        fields -> fields.get("id"),
+        fields -> fields.get("type")
+      );
+    }
+
     Path pgfEncodingZip = sourcesDir.resolve("pgf-encoding.zip");
     Path qrankCsv = sourcesDir.resolve("qrank.csv.gz");
 
@@ -350,6 +379,7 @@ public class Basemap extends ForwardingProfile {
     }
 
     List<String> availableLayers = List.of(
+      Infrastructure.LAYER_NAME,
       Boundaries.LAYER_NAME,
       Buildings.LAYER_NAME,
       Landuse.LAYER_NAME,
@@ -384,7 +414,7 @@ public class Basemap extends ForwardingProfile {
       outputName = area;
     }
 
-    planetiler.setProfile(new Basemap(qrankDb, countryCoder, clip, layer))
+    planetiler.setProfile(new Basemap(qrankDb, countryCoder, clip, layer, !overtureBuildingsFile.isEmpty()))
       .setOutput(Path.of(outputName + ".pmtiles"))
       .run();
   }

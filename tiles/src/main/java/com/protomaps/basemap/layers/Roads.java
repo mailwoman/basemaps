@@ -21,6 +21,7 @@ import com.onthegomap.planetiler.reader.osm.OsmRelationInfo;
 import com.protomaps.basemap.feature.CountryCoder;
 import com.protomaps.basemap.feature.FeatureId;
 import com.protomaps.basemap.feature.Matcher;
+import com.protomaps.basemap.feature.Smoothing;
 import com.protomaps.basemap.geometry.Linear;
 import com.protomaps.basemap.locales.CartographicLocale;
 import com.protomaps.basemap.names.OsmNames;
@@ -391,7 +392,15 @@ public class Roads implements ForwardingProfile.LayerPostProcessor, ForwardingPr
 
     minZoom = sf.hasTag("access", "private", "no") ? Math.max(minZoom, 15) : minZoom;
 
-    var feat = features.line("roads")
+    FeatureCollector.Feature feat;
+    try {
+      // sf.line() rather than worldGeometry(), which returns a polygon for a closed way such as a roundabout.
+      feat = features.geometry("roads", Smoothing.smoothWorldLine(sf.line()));
+    } catch (GeometryException e) {
+      e.log("Failed to smooth road geometry");
+      feat = features.line("roads");
+    }
+    feat
       .setId(FeatureId.create(sf))
       .setAttr("kind", kind)
       // To power better client label collisions
