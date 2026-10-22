@@ -37,6 +37,13 @@ cd basemaps/tiles
 mvn -q clean package
 mkdir -p data/sources
 
+JAR=target/protomaps-basemap-HEAD-with-deps.jar
+
+# The OSM extract and the other Planetiler inputs download while DuckDB pulls the Overture buildings.
+echo "== planetiler inputs (background)"
+java -jar "$JAR" --area="$AREA" --download --only-download > planetiler-download.log 2>&1 &
+DOWNLOAD_PID=$!
+
 echo "== overture buildings"
 RELEASE=$(duckdb -noheader -list -c "SELECT latest FROM read_json('https://stac.overturemaps.org/catalog.json')")
 IFS=',' read -r XMIN YMIN XMAX YMAX <<< "$BBOX"
@@ -53,11 +60,16 @@ COPY (
   WHERE bbox.xmin <= ${XMAX} AND bbox.xmax >= ${XMIN}
     AND bbox.ymin <= ${YMAX} AND bbox.ymax >= ${YMIN}
 ) TO 'data/sources/${AREA}-buildings.parquet' (FORMAT PARQUET);"
+echo "== waiting for planetiler inputs"
+if ! wait "$DOWNLOAD_PID"; then
+  tail -n 40 planetiler-download.log
+  exit 1
+fi
 ls -la data/sources
 
 echo "== planetiler"
-java -Xmx24g -jar target/protomaps-basemap-HEAD-with-deps.jar \
-  --area="$AREA" --download \
+java -Xmx24g -jar "$JAR" \
+  --area="$AREA" \
   --overture_buildings="data/sources/${AREA}-buildings.parquet" \
   --storage=mmap --nodemap-type=array --force
 ls -la "${AREA}.pmtiles"
