@@ -106,7 +106,7 @@ public class Buildings implements ForwardingProfile.LayerPostProcessor {
 
   public void processOsm(SourceFeature sf, FeatureCollector features) {
     if (!overtureFootprints && sf.canBePolygon() && ((sf.hasTag("building") && !sf.hasTag("building", "no")) ||
-      (sf.hasTag("building:part") && !sf.hasTag("building:part", "no")))) {
+      (sf.hasTag("building:part") && !sf.hasTag("building:part", "no"))) && !isModeledLandmark(sf)) {
 
       var height = parseHeight(sf.getString(HEIGHT_KEY), sf.getString("building:levels"), sf.getString(MIN_HEIGHT_KEY));
       Integer minZoom = 11;
@@ -158,6 +158,32 @@ public class Buildings implements ForwardingProfile.LayerPostProcessor {
   }
 
   /**
+   * Landmarks drawn by a 3D model rather than by extrusion, as {lon, lat, radius in meters}. A building or part whose
+   * centroid lies within the radius is left out of the tiles, so its stacked prisms do not show through the model.
+   */
+  static final double[][] MODELED_LANDMARKS = {
+    {139.745433, 35.658581, 45}, // Tokyo Tower
+    {139.810700, 35.710063, 45}, // Tokyo Skytree
+  };
+
+  private static boolean isModeledLandmark(SourceFeature sf) {
+    org.locationtech.jts.geom.Point centroid;
+    try {
+      centroid = sf.latLonGeometry().getCentroid();
+    } catch (GeometryException e) {
+      return false;
+    }
+    for (double[] landmark : MODELED_LANDMARKS) {
+      double dx = (centroid.getX() - landmark[0]) * 111_320 * Math.cos(Math.toRadians(landmark[1]));
+      double dy = (centroid.getY() - landmark[1]) * 110_540;
+      if (Math.hypot(dx, dy) <= landmark[2]) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
    * Corner radius of building footprints, in meters. Rounded corners give extruded walls a soft vertical edge.
    */
   static final double CORNER_METERS = 1.2;
@@ -196,7 +222,7 @@ public class Buildings implements ForwardingProfile.LayerPostProcessor {
     boolean isPart = "building_part".equals(sf.getString("type"));
     // A building with parts is drawn by its parts. Its own outline is the envelope of every part at the tallest
     // part's height, which would hide a tower's shape inside a plain prism.
-    if (!isPart && Boolean.TRUE.equals(sf.getTag("has_parts"))) {
+    if (!isPart && Boolean.TRUE.equals(sf.getTag("has_parts")) || isModeledLandmark(sf)) {
       return;
     }
     // Overture gives height in meters and floors as `num_floors`; floors convert the same way as `building:levels`.

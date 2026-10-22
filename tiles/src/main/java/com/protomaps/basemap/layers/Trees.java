@@ -24,6 +24,11 @@ import org.locationtech.jts.geom.Polygon;
  * {@link #ROW_SPACING_METERS} along its length. Each feature carries {@code kind} ({@code trunk} or {@code crown}),
  * {@code height} and {@code min_height} in meters, and {@code leaf_type} when the tree has one.
  * </p>
+ *
+ * <p>
+ * Each tree also has a {@code kind=tree} point carrying {@code height}, {@code crown_base} and
+ * {@code crown_diameter} in meters, for renderers that draw a model at each tree.
+ * </p>
  */
 public class Trees implements ForwardingProfile.LayerPostProcessor {
 
@@ -103,6 +108,15 @@ public class Trees implements ForwardingProfile.LayerPostProcessor {
     double crownBase = height * CROWN_BASE_FRACTION;
     // Needle-leaved trees are narrow for their height.
     double crownRadius = "needleleaved".equals(leafType) ? crown * 0.35 : crown * 0.5;
+
+    // A point per tree lets a renderer place a tree model; the trunk and crown below serve plain extrusion styles.
+    features.geometry(LAYER_NAME, FACTORY.createPoint(center))
+      .setAttr("kind", "tree")
+      .setAttr("height", round(height))
+      .setAttr("crown_base", round(crownBase))
+      .setAttr("crown_diameter", round(crownRadius * 2))
+      .setAttr("leaf_type", leafType)
+      .setZoomRange(15, 15);
 
     features.geometry(LAYER_NAME, octagon(center, TRUNK_RADIUS_METERS * metersToWorld))
       .setAttr("kind", "trunk")
