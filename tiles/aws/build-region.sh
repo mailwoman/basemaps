@@ -70,15 +70,10 @@ if ! curl -fsSL --retry 2 --connect-timeout 30 --max-time 900 -o data/sources/qr
 fi
 
 echo "== planetiler inputs (background)"
-# Planetiler's downloader fails the whole build when one size request times out, which happens with
-# osmdata.openstreetmap.de. curl fetches the large polygon files first with retries; Planetiler skips existing files.
-(
-  for name in water-polygons-split-3857 land-polygons-split-3857; do
-    curl -fsSL --retry 5 --retry-delay 15 --retry-all-errors --connect-timeout 60 \
-      -o "data/sources/${name}.zip" "https://osmdata.openstreetmap.de/download/${name}.zip"
-  done
-  java -jar "$JAR" --area="$AREA" --download --only-download --http_timeout=300s --http_retries=3
-) > planetiler-download.log 2>&1 &
+# Land and ocean polygons come from Overture below (--overture_base), so Planetiler does not request them from
+# osmdata.openstreetmap.de, whose outages otherwise fail the whole build.
+java -jar "$JAR" --area="$AREA" --overture_base=unused --download --only-download \
+  --http_timeout=300s --http_retries=3 > planetiler-download.log 2>&1 &
 DOWNLOAD_PID=$!
 
 echo "== overture buildings"
@@ -101,6 +96,24 @@ COPY (
 ) TO 'data/sources/${AREA}-buildings.parquet' (FORMAT PARQUET);"
 [[ -s "data/sources/${AREA}-buildings.parquet" ]] || { echo "Overture buildings query wrote no file"; exit 1; }
 duckdb -c "SELECT type, count(*) FROM 'data/sources/${AREA}-buildings.parquet' GROUP BY type"
+
+echo "== overture land and ocean"
+duckdb -c "
+INSTALL httpfs; LOAD httpfs;
+SET s3_region='us-west-2';
+COPY (
+  SELECT *
+  FROM read_parquet(
+    's3://overturemaps-us-west-2/release/${RELEASE}/theme=base/type=*/*.parquet',
+    hive_partitioning=1, union_by_name=1
+  )
+  WHERE ((type = 'land' AND subtype = 'land') OR (type = 'water' AND subtype = 'ocean'))
+    AND bbox.xmin <= ${XMAX} AND bbox.xmax >= ${XMIN}
+    AND bbox.ymin <= ${YMAX} AND bbox.ymax >= ${YMIN}
+) TO 'data/sources/${AREA}-base.parquet' (FORMAT PARQUET);"
+duckdb -c "SELECT type, subtype, count(*) FROM 'data/sources/${AREA}-base.parquet' GROUP BY ALL" | tee base-counts.txt
+grep -q " ocean " base-counts.txt || { echo "Overture base query returned no ocean polygons"; exit 1; }
+grep -q " land " base-counts.txt || { echo "Overture base query returned no land polygons"; exit 1; }
 echo "== waiting for planetiler inputs"
 if ! wait "$DOWNLOAD_PID"; then
   tail -n 40 planetiler-download.log
@@ -112,6 +125,7 @@ echo "== planetiler"
 java -Xmx24g -jar "$JAR" \
   --area="$AREA" \
   --overture_buildings="data/sources/${AREA}-buildings.parquet" \
+  --overture_base="data/sources/${AREA}-base.parquet" \
   --storage=mmap --nodemap-type=array --force
 ls -la "${AREA}.pmtiles"
 

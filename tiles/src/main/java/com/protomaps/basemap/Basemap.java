@@ -121,6 +121,7 @@ public class Basemap extends ForwardingProfile {
       registerHandler(water);
       registerSourceHandler("osm", water::processOsm);
       registerSourceHandler("osm_water", water::processPreparedOsm);
+      registerSourceHandler("pm:overture_base", water::processOverture);
       registerSourceHandler("ne", water::processNe);
       registerSourceHandler("pm:overture", water::processOverture);
     }
@@ -131,6 +132,7 @@ public class Basemap extends ForwardingProfile {
 
       registerSourceHandler("osm", earth::processOsm);
       registerSourceHandler("osm_land", earth::processPreparedOsm);
+      registerSourceHandler("pm:overture_base", earth::processOverture);
       registerSourceHandler("ne", earth::processNe);
       registerSourceHandler("pm:overture", earth::processOverture);
     }
@@ -324,12 +326,27 @@ public class Basemap extends ForwardingProfile {
       // Add OSM and GeoPackage sources
       planetiler
         .addOsmSource("osm", Path.of("data", "sources", area + ".osm.pbf"), "geofabrik:" + area)
-        .addShapefileSource("osm_water", sourcesDir.resolve("water-polygons-split-3857.zip"),
-          "https://osmdata.openstreetmap.de/download/water-polygons-split-3857.zip")
-        .addShapefileSource("osm_land", sourcesDir.resolve("land-polygons-split-3857.zip"),
-          "https://osmdata.openstreetmap.de/download/land-polygons-split-3857.zip")
         .addGeoPackageSource("landcover", sourcesDir.resolve("daylight-landcover.gpkg"),
           "https://r2-public.protomaps.com/datasets/daylight-landcover.gpkg");
+
+      // Overture's base theme carries land and ocean polygons derived from the same OSM coastline as the
+      // osmdata.openstreetmap.de files, so it can stand in for them when that host is unavailable.
+      String overtureBase = args.getString("overture_base",
+        "Overture base .parquet with land and ocean polygons, replacing the osmdata.openstreetmap.de files", "");
+      if (overtureBase.isEmpty()) {
+        planetiler
+          .addShapefileSource("osm_water", sourcesDir.resolve("water-polygons-split-3857.zip"),
+            "https://osmdata.openstreetmap.de/download/water-polygons-split-3857.zip")
+          .addShapefileSource("osm_land", sourcesDir.resolve("land-polygons-split-3857.zip"),
+            "https://osmdata.openstreetmap.de/download/land-polygons-split-3857.zip");
+      } else {
+        planetiler.addParquetSource("pm:overture_base",
+          List.of(Path.of(overtureBase)),
+          false,
+          fields -> fields.get("id"),
+          fields -> fields.get("type")
+        );
+      }
     }
 
     // Overture's building theme merges OSM with machine-detected footprints, so it replaces OSM building polygons.
