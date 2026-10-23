@@ -140,9 +140,11 @@ TREETOPS_PID=$!
 echo "== overture buildings"
 if $PLANET; then
   # The whole theme is copied as published, partitions and all; Planetiler reads the directory.
+  # The `theme=buildings` directory is kept, because hive partitioning reads `theme` only from the path
+  # and the buildings profile drops a row whose theme is not `buildings`.
   BUILDINGS="data/sources/planet-buildings"
   aws s3 sync --no-sign-request --only-show-errors \
-    "s3://overturemaps-us-west-2/release/${RELEASE}/theme=buildings/" "$BUILDINGS/"
+    "s3://overturemaps-us-west-2/release/${RELEASE}/theme=buildings/" "$BUILDINGS/theme=buildings/"
   [[ -n "$(find "$BUILDINGS" -name '*.parquet' -print -quit)" ]] || { echo "Overture buildings sync wrote no files"; exit 1; }
   du -sh "$BUILDINGS"
   BBOX_FILTER="TRUE"
