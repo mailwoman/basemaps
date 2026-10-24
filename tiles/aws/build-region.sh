@@ -15,7 +15,7 @@ set -euo pipefail
 : "${BRANCH:=main}"
 : "${OUTPUT_KEY:?R2 key for the PMTiles, such as protomaps/builds/japan.pmtiles}"
 : "${MAX_HOURS:=8}"
-: "${BUCKET:=nexus-public}"
+: "${BUCKET:=mailwoman-public}"
 
 LOG=/var/log/basemap-build.log
 exec > >(tee -a "$LOG") 2>&1
@@ -164,6 +164,11 @@ else
   ) TO '${BUILDINGS}' (FORMAT PARQUET);"
   [[ -s "$BUILDINGS" ]] || { echo "Overture buildings query wrote no file"; exit 1; }
   duckdb -c "SELECT type, count(*) FROM '${BUILDINGS}' GROUP BY type"
+  # How many buildings carry each attribute the basemap reads or infers.
+  duckdb -c "SELECT type, count(*) AS n, count(height) AS height, count(num_floors) AS num_floors,
+    count(class) AS class, count(facade_color) AS facade_color, count(roof_color) AS roof_color,
+    count(roof_shape) AS roof_shape, count(*) FILTER (WHERE height IS NULL AND num_floors IS NULL) AS inferred
+    FROM '${BUILDINGS}' GROUP BY type"
 fi
 
 echo "== overture land and ocean"

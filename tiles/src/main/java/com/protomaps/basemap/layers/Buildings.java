@@ -34,6 +34,15 @@ public class Buildings implements ForwardingProfile.LayerPostProcessor {
    * The roof's height in meters, from OSM's `roof:height` or Overture's `roof_height`.
    */
   static final String ROOF_HEIGHT_KEY = "roof_height";
+  /** Where {@code height} came from: the source's height, its floor count, or an inference from class and area. */
+  static final String HEIGHT_SOURCE_KEY = "height_src";
+  /** An index from 0 to 15 shared by the buildings in one 128 m cell, for choosing a palette entry. */
+  static final String DISTRICT_KEY = "district";
+  static final String FACADE_COLOR_KEY = "facade_color";
+  static final String ROOF_COLOR_KEY = "roof_color";
+  static final String ROOF_MATERIAL_KEY = "roof_material";
+  static final String FACADE_MATERIAL_KEY = "facade_material";
+  static final String CLASS_KEY = "class";
 
   public static final String LAYER_NAME = "buildings";
 
@@ -242,11 +251,35 @@ public class Buildings implements ForwardingProfile.LayerPostProcessor {
       sf.hasTag("num_floors") ? String.valueOf(sf.getTag("num_floors")) : null,
       sf.hasTag("min_height") ? String.valueOf(sf.getTag("min_height")) : null);
 
+    long id = gersFeatureId(sf.getString("id"));
+    Double buildingHeight = height.height();
+    String heightSource = sf.hasTag("height") ? BuildingInference.HEIGHT_FROM_TAG :
+      sf.hasTag("num_floors") ? BuildingInference.HEIGHT_FROM_FLOORS : null;
+    Integer district = null;
+    try {
+      var centroid = sf.latLonGeometry().getCentroid();
+      district = BuildingInference.district(centroid.getX(), centroid.getY());
+      if (heightSource == null && !isPart) {
+        double area = BuildingInference.worldAreaToSquareMeters(sf.area(), centroid.getY());
+        buildingHeight = BuildingInference.inferHeight(sf.getString("class"), area, id).meters();
+        heightSource = BuildingInference.HEIGHT_FROM_CLASS;
+      }
+    } catch (GeometryException e) {
+      e.log("Failed to read a building's centroid");
+    }
+
     var feature = roundedFootprint(sf, features)
-      .setId(gersFeatureId(sf.getString("id")))
+      .setId(id)
       .setAttr("kind", isPart ? "building_part" : "building")
       // NOTE: Height is quantized by zoom in a post-process step
-      .setAttr(HEIGHT_KEY, height.height())
+      .setAttr(HEIGHT_KEY, buildingHeight)
+      .setAttrWithMinzoom(HEIGHT_SOURCE_KEY, heightSource, 13)
+      .setAttrWithMinzoom(DISTRICT_KEY, district, 13)
+      .setAttrWithMinzoom(FACADE_COLOR_KEY, BuildingInference.normalizeColor(sf.getTag("facade_color")), 13)
+      .setAttrWithMinzoom(ROOF_COLOR_KEY, BuildingInference.normalizeColor(sf.getTag("roof_color")), 13)
+      .setAttrWithMinzoom(ROOF_MATERIAL_KEY, sf.getTag("roof_material") instanceof String m ? m : null, 15)
+      .setAttrWithMinzoom(FACADE_MATERIAL_KEY, sf.getTag("facade_material") instanceof String m ? m : null, 15)
+      .setAttrWithMinzoom(CLASS_KEY, sf.getTag("class") instanceof String c ? c : null, 15)
       .setAttrWithMinzoom(ROOF_SHAPE_KEY, sf.getTag("roof_shape") instanceof String shape ? shape : null, 15)
       .setAttrWithMinzoom(ROOF_HEIGHT_KEY, sf.getTag("roof_height") instanceof Number roof ? roof.doubleValue() : null, 15)
       .setAttr("sort_rank", 400)
