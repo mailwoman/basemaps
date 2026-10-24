@@ -34,7 +34,7 @@ public class Buildings implements ForwardingProfile.LayerPostProcessor {
    * The roof's height in meters, from OSM's `roof:height` or Overture's `roof_height`.
    */
   static final String ROOF_HEIGHT_KEY = "roof_height";
-  /** Where {@code height} came from: the source's height, its floor count, or an inference from class and area. */
+  /** Where {@code height} came from: the source's height or its floor count. A building with neither has none. */
   static final String HEIGHT_SOURCE_KEY = "height_src";
   /** An index from 0 to 15 shared by the buildings in one 128 m cell, for choosing a palette entry. */
   static final String DISTRICT_KEY = "district";
@@ -253,17 +253,12 @@ public class Buildings implements ForwardingProfile.LayerPostProcessor {
 
     long id = gersFeatureId(sf.getString("id"));
     Double buildingHeight = height.height();
-    String heightSource = sf.hasTag("height") ? BuildingInference.HEIGHT_FROM_TAG :
-      sf.hasTag("num_floors") ? BuildingInference.HEIGHT_FROM_FLOORS : null;
+    String heightSource = sf.hasTag("height") ? BuildingAttributes.HEIGHT_FROM_TAG :
+      sf.hasTag("num_floors") ? BuildingAttributes.HEIGHT_FROM_FLOORS : null;
     Integer district = null;
     try {
       var centroid = sf.latLonGeometry().getCentroid();
-      district = BuildingInference.district(centroid.getX(), centroid.getY());
-      if (heightSource == null && !isPart) {
-        double area = BuildingInference.worldAreaToSquareMeters(sf.area(), centroid.getY());
-        buildingHeight = BuildingInference.inferHeight(sf.getString("class"), area, id).meters();
-        heightSource = BuildingInference.HEIGHT_FROM_CLASS;
-      }
+      district = BuildingAttributes.district(centroid.getX(), centroid.getY());
     } catch (GeometryException e) {
       e.log("Failed to read a building's centroid");
     }
@@ -275,8 +270,8 @@ public class Buildings implements ForwardingProfile.LayerPostProcessor {
       .setAttr(HEIGHT_KEY, buildingHeight)
       .setAttrWithMinzoom(HEIGHT_SOURCE_KEY, heightSource, 13)
       .setAttrWithMinzoom(DISTRICT_KEY, district, 13)
-      .setAttrWithMinzoom(FACADE_COLOR_KEY, BuildingInference.normalizeColor(sf.getTag("facade_color")), 13)
-      .setAttrWithMinzoom(ROOF_COLOR_KEY, BuildingInference.normalizeColor(sf.getTag("roof_color")), 13)
+      .setAttrWithMinzoom(FACADE_COLOR_KEY, BuildingAttributes.normalizeColor(sf.getTag("facade_color")), 13)
+      .setAttrWithMinzoom(ROOF_COLOR_KEY, BuildingAttributes.normalizeColor(sf.getTag("roof_color")), 13)
       .setAttrWithMinzoom(ROOF_MATERIAL_KEY, sf.getTag("roof_material") instanceof String m ? m : null, 15)
       .setAttrWithMinzoom(FACADE_MATERIAL_KEY, sf.getTag("facade_material") instanceof String m ? m : null, 15)
       .setAttrWithMinzoom(CLASS_KEY, sf.getTag("class") instanceof String c ? c : null, 15)
