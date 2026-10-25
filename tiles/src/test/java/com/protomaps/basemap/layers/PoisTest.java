@@ -764,8 +764,10 @@ class PoisTest extends LayerTest {
 
   @Test
   void zoom_17_unnamedBench() {
+    // The infrastructure layer repeats the bench as a street-furniture prop.
     assertFeatures(15,
-      List.of(Map.of("kind", "bench", "min_zoom", 17)),
+      List.of(Map.of("_layer", "infrastructure", "prop", "bench"), Map.of("_layer", "pois", "kind", "bench",
+        "min_zoom", 17)),
       process(SimpleFeature.create(
         newPoint(1, 1),
         new HashMap<>(Map.of("amenity", "bench")),

@@ -18,6 +18,7 @@ import com.onthegomap.planetiler.geo.GeometryException;
 import com.onthegomap.planetiler.reader.SourceFeature;
 import com.onthegomap.planetiler.reader.osm.OsmElement;
 import com.onthegomap.planetiler.reader.osm.OsmRelationInfo;
+import com.onthegomap.planetiler.util.Parse;
 import com.protomaps.basemap.feature.CountryCoder;
 import com.protomaps.basemap.feature.FeatureId;
 import com.protomaps.basemap.feature.Matcher;
@@ -462,10 +463,69 @@ public class Roads implements ForwardingProfile.LayerPostProcessor, ForwardingPr
       }
     }
 
+    // Cross-section attributes for a 3D street: lane count, carriageway width, surface and sidewalk sides.
+    feat.setAttrWithMinzoom("lanes", parseLanes(sf.getString("lanes")), 15);
+    feat.setAttrWithMinzoom("width", Parse.meters(sf.getString("width")), 15);
+    feat.setAttrWithMinzoom("surface", sf.getString("surface"), 15);
+    feat.setAttrWithMinzoom("sidewalk", sidewalkSides(sf), 15);
+    // A footway crossing's type (uncontrolled, traffic_signals) and painted markings (zebra, lines).
+    if (sf.hasTag("footway", "crossing") || sf.hasTag("highway", "crossing")) {
+      feat.setAttrWithMinzoom("crossing", sf.getString("crossing"), 15);
+      feat.setAttrWithMinzoom("crossing_markings", sf.getString("crossing:markings"), 15);
+    }
+
     // Server sort features so client label collisions are pre-sorted
     feat.setSortKey(minZoom);
 
     OsmNames.setOsmNames(feat, sf, minZoomNames);
+  }
+
+  /**
+   * The lane count from an OSM {@code lanes} tag, or null when the tag is absent or not a count from 1 to 16.
+   */
+  static Integer parseLanes(String value) {
+    // A strict match: Parse.parseLongOrNull reads the leading number of a per-direction value such as "2;3".
+    if (value == null || !value.matches("\\d{1,2}")) {
+      return null;
+    }
+    int lanes = Integer.parseInt(value);
+    return lanes >= 1 && lanes <= 16 ? lanes : null;
+  }
+
+  /**
+   * The sides of a way that carry a sidewalk: {@code both}, {@code left}, {@code right} or {@code no}.
+   *
+   * <p>
+   * OSM records this as {@code sidewalk} or as the per-side keys {@code sidewalk:both}, {@code sidewalk:left} and
+   * {@code sidewalk:right}. A side tagged {@code separate} is mapped as its own footway, so it counts as no sidewalk
+   * on this way. The result is null when no sidewalk key is present.
+   * </p>
+   */
+  static String sidewalkSides(SourceFeature sf) {
+    String combined = sf.getString("sidewalk");
+    if (combined == null) {
+      combined = sf.getString("sidewalk:both");
+      if ("yes".equals(combined)) {
+        combined = "both";
+      }
+    }
+    if (combined != null) {
+      return switch (combined) {
+        case "both", "left", "right", "no" -> combined;
+        case "yes" -> "both";
+        case "none", "separate" -> "no";
+        default -> null;
+      };
+    }
+    boolean left = "yes".equals(sf.getString("sidewalk:left"));
+    boolean right = "yes".equals(sf.getString("sidewalk:right"));
+    if (left && right) {
+      return "both";
+    }
+    if (left || right) {
+      return left ? "left" : "right";
+    }
+    return sf.hasTag("sidewalk:left") || sf.hasTag("sidewalk:right") ? "no" : null;
   }
 
   private void processOsmNonHighways(SourceFeature sf, FeatureCollector features) {

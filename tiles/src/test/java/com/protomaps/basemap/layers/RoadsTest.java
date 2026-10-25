@@ -1,6 +1,8 @@
 package com.protomaps.basemap.layers;
 
 import static com.onthegomap.planetiler.TestUtils.newLineString;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 
 import com.onthegomap.planetiler.FeatureCollector;
 import com.onthegomap.planetiler.TestUtils;
@@ -575,6 +577,52 @@ class RoadsTest extends LayerTest {
         "service", service
       )
     );
+  }
+
+  @Test
+  void crossSectionAttributesAtZ15() {
+    assertFeatures(15,
+      List.of(Map.of("lanes", 2, "width", 7.5, "surface", "asphalt", "sidewalk", "both")),
+      processWith("highway", "residential", "lanes", "2", "width", "7.5", "surface", "asphalt", "sidewalk", "yes"));
+    var z14 = processWith("highway", "residential", "lanes", "2").iterator().next().getAttrsAtZoom(14);
+    assertNull(z14.get("lanes"));
+  }
+
+  @ParameterizedTest
+  @CsvSource({
+    "sidewalk, both, both",
+    "sidewalk, separate, no",
+    "sidewalk:both, yes, both",
+    "sidewalk:left, yes, left",
+    "sidewalk:right, yes, right",
+    "sidewalk:left, no, no",
+  })
+  void sidewalkSides(String key, String value, String sides) {
+    assertFeatures(15,
+      List.of(Map.of("sidewalk", sides)),
+      processWith("highway", "residential", key, value));
+  }
+
+  @Test
+  void sidewalkLeftAndRightCombine() {
+    assertFeatures(15,
+      List.of(Map.of("sidewalk", "both")),
+      processWith("highway", "residential", "sidewalk:left", "yes", "sidewalk:right", "yes"));
+  }
+
+  @Test
+  void lanesOutsideACountAreDropped() {
+    assertNull(Roads.parseLanes("2;3"));
+    assertNull(Roads.parseLanes("0"));
+    assertEquals(4, Roads.parseLanes("4"));
+  }
+
+  @Test
+  void footwayCrossingCarriesItsMarkings() {
+    assertFeatures(15,
+      List.of(Map.of("kind_detail", "crossing", "crossing", "traffic_signals", "crossing_markings", "zebra")),
+      processWith("highway", "footway", "footway", "crossing", "crossing", "traffic_signals", "crossing:markings",
+        "zebra"));
   }
 
 }

@@ -10,8 +10,13 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Utility networks, barriers and road-side signals beyond the Protomaps schema. Street furniture such as benches and
- * post boxes is in the {@code pois} layer.
+ * Utility networks, barriers, road-side signals and street furniture beyond the Protomaps schema. Benches, waste
+ * baskets, post boxes and vending machines are also in the {@code pois} layer, which labels them.
+ *
+ * <p>
+ * A street-furniture point carries {@code prop}, the model class a 3D renderer places there (such as {@code bench},
+ * {@code hydrant}, {@code lamp} or {@code signal}), and {@code direction} when OSM records the way it faces.
+ * </p>
  *
  * <p>
  * Each feature carries {@code kind}, the OSM key that classified it ({@code power}, {@code telecom}, {@code water},
@@ -44,6 +49,8 @@ public class Infrastructure implements ForwardingProfile.LayerPostProcessor {
       "traffic_signals", 15, "stop", 15, "give_way", 15, "crossing", 15, "street_lamp", 15,
       "speed_camera", 15, "traffic_mirror", 15),
     "natural", Map.of("tree_row", 15),
+    // Street furniture also in the pois layer, repeated here so every prop a 3D renderer places is in one layer.
+    "amenity", Map.of("bench", 15, "waste_basket", 15, "post_box", 15, "vending_machine", 15),
     "man_made", Map.ofEntries(
       Map.entry("mast", 14), Map.entry("tower", 14), Map.entry("street_cabinet", 15),
       Map.entry("water_tower", 14), Map.entry("storage_tank", 15), Map.entry("reservoir_covered", 15),
@@ -56,12 +63,24 @@ public class Infrastructure implements ForwardingProfile.LayerPostProcessor {
    * Keys checked in order; the first key with a kept value classifies the feature.
    */
   private static final List<String> KEYS = List.of("power", "telecom", "emergency", "barrier", "highway", "natural",
-    "man_made");
+    "man_made", "amenity");
 
   /**
-   * Keys kept only as points, because the roads layer draws ways with the same tag.
+   * Keys kept only as points: the roads layer draws highway ways, and an amenity area is a building or a site.
    */
-  private static final Set<String> POINT_ONLY_KEYS = Set.of("highway");
+  private static final Set<String> POINT_ONLY_KEYS = Set.of("highway", "amenity");
+
+  /**
+   * The model class a renderer places at a street-furniture point, keyed by tag value. Several tag values share a
+   * model, such as the three road signs. A point whose value is absent from this map has no {@code prop}.
+   */
+  private static final Map<String, String> PROPS = Map.ofEntries(
+    Map.entry("bench", "bench"), Map.entry("waste_basket", "waste_basket"), Map.entry("post_box", "post_box"),
+    Map.entry("vending_machine", "vending_machine"), Map.entry("fire_hydrant", "hydrant"),
+    Map.entry("bollard", "bollard"), Map.entry("street_lamp", "lamp"), Map.entry("traffic_signals", "signal"),
+    Map.entry("stop", "sign"), Map.entry("give_way", "sign"), Map.entry("speed_camera", "sign"),
+    Map.entry("traffic_mirror", "mirror"), Map.entry("street_cabinet", "cabinet"),
+    Map.entry("utility_pole", "pole"), Map.entry("pole", "pole"));
 
   /**
    * {@code man_made} values that belong to the water network rather than general structures.
@@ -141,6 +160,12 @@ public class Infrastructure implements ForwardingProfile.LayerPostProcessor {
       .setAttr("crossing", sf.getString("crossing"))
       .setAttr("kerb", sf.getString("kerb"))
       .setZoomRange(minZoom, 15);
+    if (sf.isPoint()) {
+      feature
+        .setAttr("prop", PROPS.get(value))
+        // The heading a sign or signal faces, in degrees or a compass point, as OSM's direction tag records it.
+        .setAttr("direction", sf.getString("direction"));
+    }
   }
 
   @Override
